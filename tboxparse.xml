@@ -1,0 +1,13 @@
+<tbox>
+  <name>DBC Data</name>
+  <rev>201704070000</rev>
+  <signal id='0x430' name='BMS08_BatNumber' byteorder='BE' firstbyte='1' firstbit='6' bitlength='2' unit='1' offset='0' source='0' />
+  <signal id='0x102' name='VCU01_PTReady' byteorder='BE' firstbyte='7' firstbit='60' bitlenght='1' unit='1' offset='0'  source='0' />
+  <signal id='0x6E' name='BMS01_BatState' byteorder='BE' firstbyte='5' firstbit='40' bitlength='4' unit='1' offset='0'  source='0' />
+  <signal id='0x102' name='BMS01_PTMode' byteorder='BE' firstbyte='7' firstbit='61' bitlength='3' unit='1' offset='0'  source='0' />
+  <signal id='0x268' name='VCU08_VehicleSpeed' byteorder='BE' firstbyte='5' firstbit='46' bitlength='10' unit='0.25' offset='0'  source='0' />
+  <signal id='0x82' name='DPU01_ODO' byteorder='BE' firstbyte='3' firstbit='24' bitlengh='20' unit='1' offset='0'  source='0' />
+  <signal id='0x6E' name='BMS01_actVoltage' byteorder='BE' firstbyte='2' firstbit='16' bitlength='12' unit='0.25' offset='0'  source='0' />
+  <signal id='0x6E' name='BMS01_actCurrent' byteorder='BE' firstbyte='1' firstbit='12' bitlength='12' unit='0.25' offset='-512'  source='0' />
+  <signal id='0x6E' name='BMS01_actSOC' byteorder='BE' firstbyte='3' firstbit='24' bitlength='8' unit='0.5' offset='0'  source='0' />
+</tbox>
