@@ -1,6 +1,7 @@
 <tbox>
   <name>DBC Data</name>
   <rev>201704070000</rev>
+  <idext>0</idext>
   <signal id='0x430' name='BMS08_BatNumber' byteorder='BE' firstbyte='1' firstbit='6' bitlength='2' unit='1' offset='0' source='0' />
   <signal id='0x102' name='VCU01_PTReady' byteorder='BE' firstbyte='7' firstbit='60' bitlenght='1' unit='1' offset='0'  source='0' />
   <signal id='0x6E' name='BMS01_BatState' byteorder='BE' firstbyte='5' firstbit='40' bitlength='4' unit='1' offset='0'  source='0' />

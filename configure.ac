@@ -42,6 +42,7 @@ CFLAGS="-Wall"
 AC_CHECK_LIB([pthread], [main],, AC_MSG_ERROR($missing_library))
 PKG_CHECK_MODULES([GLIB2], [glib-2.0 >= 2.32, gthread-2.0 >= 2.32, \
     gmodule-2.0 >= 2.32, gio-2.0 >= 2.32])
+PKG_CHECK_MODULES([LIBSOUP], [libsoup-2.4 >= 2.0])
 
 AC_ARG_ENABLE(debug, AS_HELP_STRING([--enable-debug], \
     [enable debug mode by default]), enable_debug=yes, \
