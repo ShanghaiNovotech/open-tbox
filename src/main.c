@@ -40,13 +40,19 @@ int main(int argc, char *argv[])
     
     if(!tl_parser_init())
     {
-        g_error("Cannot initialze parser!");
+        g_error("Cannot initialize parser!");
         return 2;
+    }
+    if(!tl_canbus_init())
+    {
+        g_error("Cannot initialize CAN-Bus!");
+        return 3;
     }
     
     g_main_loop_run(g_tl_main_loop);
     g_main_loop_unref(g_tl_main_loop);
     
+    tl_canbus_uninit();
     tl_parser_uninit();
     
     return 0;

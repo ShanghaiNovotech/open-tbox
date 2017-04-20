@@ -74,6 +74,7 @@ static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
                     {
                         parser_data->use_ext_id = TRUE;
                     }
+                    g_debug("Parsed CAN-Bus ID %d\n", signal_data->id);
                 }
             }
             else if(g_strcmp0(attribute_names[i], "name")==0)
@@ -181,8 +182,8 @@ gboolean tl_parser_init()
     
     g_tl_parser_data.data_flag = FALSE;
     g_tl_parser_data.primary_state = TL_PARSER_PRIMARY_STATE_NONE;
-    g_tl_parser_data.parser_table = g_hash_table_new_full(g_int_hash,
-        g_int_equal, NULL, (GDestroyNotify)tl_parser_signal_data_free);
+    g_tl_parser_data.parser_table = g_hash_table_new_full(g_direct_hash,
+        g_direct_equal, NULL, (GDestroyNotify)tl_parser_signal_data_free);
     
     g_tl_parser_data.initialized = TRUE;
     
@@ -200,7 +201,11 @@ void tl_parser_uninit()
         g_markup_parse_context_free(g_tl_parser_data.parser_context);
         g_tl_parser_data.parser_context = NULL;
     }
-
+    if(g_tl_parser_data.parser_table!=NULL)
+    {
+        g_hash_table_unref(g_tl_parser_data.parser_table);
+        g_tl_parser_data.parser_table = NULL;
+    }
     
     g_tl_parser_data.initialized = FALSE;
 }
@@ -267,5 +272,11 @@ gboolean tl_parser_load_parse_file(const gchar *file)
         g_tl_parser_data.parser_context = NULL;
     }
     
+    return TRUE;
+}
+
+gboolean tl_parser_parse_can_data(const gchar *device,
+    int can_id, guint8 *data, gsize len)
+{
     return TRUE;
 }

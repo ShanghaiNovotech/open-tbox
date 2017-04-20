@@ -3,4 +3,7 @@
 
 #include <glib.h>
 
+gboolean tl_canbus_init();
+void tl_canbus_uninit();
+
 #endif
