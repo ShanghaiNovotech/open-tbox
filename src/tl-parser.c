@@ -39,6 +39,15 @@ static void tl_parser_signal_data_free(TLParserSignalData *data)
     g_free(data);
 }
 
+static void tl_parser_signal_data_list_free(GSList *list)
+{
+    if(list==NULL)
+    {
+        return;
+    }
+    g_slist_free_full(list, (GDestroyNotify)tl_parser_signal_data_free);
+}
+
 static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
     const gchar *element_name, const gchar **attribute_names,
     const gchar **attribute_values, gpointer user_data, GError **error)
@@ -47,6 +56,7 @@ static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
     int i;
     TLParserSignalData *signal_data;
     gboolean have_id = FALSE;
+    GSList *signal_list;
     
     if(user_data==NULL)
     {
@@ -116,8 +126,19 @@ static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
         
         if(have_id)
         {
+            if(g_hash_table_contains(parser_data->parser_table,
+                GINT_TO_POINTER(signal_data->id)))
+            {
+                signal_list = g_hash_table_lookup(parser_data->parser_table,
+                    GINT_TO_POINTER(signal_data->id));
+                signal_list = g_slist_prepend(signal_list, signal_data);
+            }
+            else
+            {
+                signal_list = g_slist_append(NULL, signal_data);
+            }
             g_hash_table_replace(parser_data->parser_table,
-                GINT_TO_POINTER(signal_data->id), signal_data);
+                GINT_TO_POINTER(signal_data->id), signal_list);
         }
         else
         {
@@ -183,7 +204,7 @@ gboolean tl_parser_init()
     g_tl_parser_data.data_flag = FALSE;
     g_tl_parser_data.primary_state = TL_PARSER_PRIMARY_STATE_NONE;
     g_tl_parser_data.parser_table = g_hash_table_new_full(g_direct_hash,
-        g_direct_equal, NULL, (GDestroyNotify)tl_parser_signal_data_free);
+        g_direct_equal, NULL, (GDestroyNotify)tl_parser_signal_data_list_free);
     
     g_tl_parser_data.initialized = TRUE;
     
@@ -278,5 +299,76 @@ gboolean tl_parser_load_parse_file(const gchar *file)
 gboolean tl_parser_parse_can_data(const gchar *device,
     int can_id, guint8 *data, gsize len)
 {
-    return TRUE;
+    GSList *signal_list, *list_foreach;
+    TLParserSignalData *signal_data;
+    gboolean parsed = FALSE;
+    guint source = 0;
+    guint firstbyte, rbits;
+    guint64 value;
+    gint i, x, y;
+    
+    if(!g_tl_parser_data.initialized || g_tl_parser_data.parser_table==NULL)
+    {
+        return FALSE;
+    }
+    
+    signal_list = g_hash_table_lookup(g_tl_parser_data.parser_table,
+        GINT_TO_POINTER(can_id));
+        
+    if(signal_list==NULL)
+    {
+        return FALSE;
+    }
+    
+    if(sscanf(device, "can%u", &source)>0)
+    {
+        source += 1;
+    }
+    
+    for(list_foreach=signal_list;list_foreach!=NULL;
+        list_foreach=g_slist_next(list_foreach))
+    {
+        signal_data = list_foreach->data;
+        
+        if(signal_data->source>0 && signal_data->source!=source)
+        {
+            continue;
+        }
+        
+        firstbyte = signal_data->firstbit / 8;
+        
+        if(firstbyte >= len)
+        {
+            continue;
+        }
+        
+        value = 0;
+        
+        if(signal_data->endian) /* BE */
+        {
+            rbits = 8 - (signal_data->firstbit%8) + firstbyte * 8;
+            for(i=0;i<signal_data->bitlength && i<rbits;i++)
+            {
+                x = (rbits - i) / 8;
+                y = (signal_data->firstbit + i) % 8;
+                value = value << 1;
+                value |= ((data[x] >> y) & 1);
+            }
+        }
+        else
+        {
+            rbits = len * 8 - signal_data->firstbit;
+            for(i=0;i<signal_data->bitlength && i<rbits;i++)
+            {
+                x = (signal_data->firstbit + i) / 8;
+                y = (signal_data->firstbit + i) % 8;
+                value = value << 1;
+                value |= ((data[x] >> y) & 1);
+            }
+        }
+        
+        g_debug("Got %s value %"G_GUINT64_FORMAT".", signal_data->name, value);
+    }
+    
+    return parsed;
 }
