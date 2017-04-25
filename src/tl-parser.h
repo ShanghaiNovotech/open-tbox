@@ -20,6 +20,6 @@ gboolean tl_parser_init();
 void tl_parser_uninit();
 gboolean tl_parser_load_parse_file(const gchar *file);
 gboolean tl_parser_parse_can_data(const gchar *device,
-    int can_id, guint8 *data, gsize len);
+    int can_id, const guint8 *data, gsize len);
 
 #endif

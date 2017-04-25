@@ -38,15 +38,22 @@ int main(int argc, char *argv[])
         daemon(0, 0);
     }
     
+    if(!tl_logger_init(NULL))
+    {
+        g_error("Cannot initialize logger!");
+        return 2;
+    }
+    
     if(!tl_parser_init())
     {
         g_error("Cannot initialize parser!");
-        return 2;
+        return 3;
     }
+    
     if(!tl_canbus_init())
     {
         g_error("Cannot initialize CAN-Bus!");
-        return 3;
+        return 4;
     }
     
     g_main_loop_run(g_tl_main_loop);
@@ -54,6 +61,7 @@ int main(int argc, char *argv[])
     
     tl_canbus_uninit();
     tl_parser_uninit();
+    tl_logger_uninit();
     
     return 0;
 }

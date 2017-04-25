@@ -3,6 +3,7 @@
 #include <string.h>
 #include <errno.h>
 #include "tl-parser.h"
+#include "tl-logger.h"
 
 typedef enum 
 {
@@ -297,15 +298,17 @@ gboolean tl_parser_load_parse_file(const gchar *file)
 }
 
 gboolean tl_parser_parse_can_data(const gchar *device,
-    int can_id, guint8 *data, gsize len)
+    int can_id, const guint8 *data, gsize len)
 {
     GSList *signal_list, *list_foreach;
     TLParserSignalData *signal_data;
     gboolean parsed = FALSE;
     guint source = 0;
     guint firstbyte, rbits;
-    guint64 value;
+    guint64 rvalue;
+    gint64 value;
     gint i, x, y;
+    TLLoggerLogItemData item_data;
     
     if(!g_tl_parser_data.initialized || g_tl_parser_data.parser_table==NULL)
     {
@@ -351,8 +354,8 @@ gboolean tl_parser_parse_can_data(const gchar *device,
             {
                 x = (rbits - i) / 8;
                 y = (signal_data->firstbit + i) % 8;
-                value = value << 1;
-                value |= ((data[x] >> y) & 1);
+                rvalue = rvalue << 1;
+                rvalue |= ((data[x] >> y) & 1);
             }
         }
         else
@@ -362,12 +365,21 @@ gboolean tl_parser_parse_can_data(const gchar *device,
             {
                 x = (signal_data->firstbit + i) / 8;
                 y = (signal_data->firstbit + i) % 8;
-                value = value << 1;
-                value |= ((data[x] >> y) & 1);
+                rvalue = rvalue << 1;
+                rvalue |= ((data[x] >> y) & 1);
             }
         }
         
+        value = (gint64)rvalue + signal_data->offset;
+        
         g_debug("Got %s value %"G_GUINT64_FORMAT".", signal_data->name, value);
+        
+        item_data.name = signal_data->name;
+        item_data.value = value;
+        item_data.unit = signal_data->unit;
+        item_data.source = signal_data->source;
+        
+        tl_logger_update_current_data(&item_data);
     }
     
     return parsed;
