@@ -379,7 +379,7 @@ gboolean tl_parser_parse_can_data(const gchar *device,
         item_data.unit = signal_data->unit;
         item_data.source = signal_data->source;
         
-        tl_logger_update_current_data(&item_data);
+        tl_logger_current_data_update(&item_data);
     }
     
     return parsed;

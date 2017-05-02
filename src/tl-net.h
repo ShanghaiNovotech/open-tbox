@@ -3,4 +3,7 @@
 
 #include <glib.h>
 
+gboolean tl_net_init();
+void tl_net_uninit();
+
 #endif

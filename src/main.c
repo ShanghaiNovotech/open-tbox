@@ -56,9 +56,15 @@ int main(int argc, char *argv[])
         return 4;
     }
     
+    if(!tl_net_init())
+    {
+        g_warning("Cannot initialize net module! Data may not be uploaded.");
+    }
+    
     g_main_loop_run(g_tl_main_loop);
     g_main_loop_unref(g_tl_main_loop);
     
+    tl_net_uninit();
     tl_canbus_uninit();
     tl_parser_uninit();
     tl_logger_uninit();
