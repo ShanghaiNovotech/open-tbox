@@ -1,6 +1,10 @@
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <json.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include "tl-logger.h"
 
 #define TL_LOGGER_STORAGE_BASE_PATH_DEFAULT "/var/lib/tbox/log"
@@ -18,13 +22,16 @@ typedef struct _TLLoggerData
     
     GMutex cached_log_mutex;
     GQueue *cached_log_data;
+    GQueue *write_log_queue;
     GList *last_saved_data;
     GHashTable *last_log_data;
     guint log_update_timeout_id;
     
     GThread *write_thread;
     gboolean write_thread_work_flag;
-    GThread *compress_thread;
+    
+    GThread *archive_thread;
+    GThread *query_thread;
 }TLLoggerData;
 
 static TLLoggerData g_tl_logger_data = {0};
@@ -61,6 +68,22 @@ static void tl_logger_log_item_data_free(TLLoggerLogItemData *data)
     g_free(data);
 }
 
+static inline guint16 tl_logger_crc16_compute(const guchar *data_p,
+    gsize length)
+{
+    guchar x;
+    guint16 crc = 0xFFFF;
+    while(length--)
+    {
+        x = crc >> 8 ^ *data_p++;
+        x ^= x>>4;
+        crc = (crc << 8) ^ ((guint16)(x << 12)) ^ ((guint16)(x <<5)) ^
+            ((guint16)x);
+    }
+    return crc;
+}
+
+
 /*
  * Log Frame:
  * | Head Magic (4B) | Length (4B) | CRC16 (2B) | JSON Data | Tail Magic (4B) |
@@ -72,30 +95,83 @@ static GByteArray *tl_logger_log_to_file_data(GHashTable *log_data)
     GByteArray *ba;
     GHashTableIter iter;
     TLLoggerLogItemData *item_data;
+    json_object *root, *child, *item_object;
+    const gchar *json_data;
+    guint32 json_len, belen;
+    guint16 crc, becrc;
     
     ba = g_byte_array_new();
     
     g_byte_array_append(ba, TL_LOGGER_LOG_ITEM_HEAD_MAGIC, 4);
+    g_byte_array_append(ba, (const guint8 *)"\0\0\0\0", 4);
+    g_byte_array_append(ba, (const guint8 *)"\0\0", 2);
+    
+    root = json_object_new_array();
     
     g_hash_table_iter_init(&iter, log_data);
     while(g_hash_table_iter_next(&iter, NULL, (gpointer *)&item_data))
     {
+        item_object = json_object_new_object();
         
+        child = json_object_new_string(item_data->name);
+        json_object_object_add(item_object, "name", child);
+        
+        child = json_object_new_int64(item_data->value);
+        json_object_object_add(item_object, "value", child);
+        
+        child = json_object_new_double(item_data->unit);
+        json_object_object_add(item_object, "unit", child);
+        
+        child = json_object_new_int(item_data->source);
+        json_object_object_add(item_object, "source", child);
+        
+        json_object_array_add(root, item_object);
     }
+    
+    json_data = json_object_to_json_string(root);
+    json_len = strlen(json_data);
+    g_byte_array_append(ba, (const guint8 *)json_data, json_len);
+    
+    crc = tl_logger_crc16_compute((const guchar *)json_data, json_len);
+    
+    json_object_put(root);
+    
+    belen = g_htonl(json_len);
+    memcpy(ba->data+4, &belen, 4);
+    
+    becrc = g_htons(crc);
+    memcpy(ba->data+8, &becrc, 2);
     
     g_byte_array_append(ba, TL_LOGGER_LOG_ITEM_TAIL_MAGIC, 4);
     
     return ba;
 }
 
+static gpointer tl_logger_log_query_thread(gpointer user_data)
+{
+    return NULL;
+}
+
+static gpointer tl_logger_log_archive_thread(gpointer user_data)
+{
+    GDir *log_dir;
+    
+    
+    
+    return NULL;
+}
+
 static gpointer tl_logger_log_write_thread(gpointer user_data)
 {
     TLLoggerData *logger_data = (TLLoggerData *)user_data;
-    GList *tail;
     GHashTable *item_data;
     GByteArray *ba;
     int fd = -1;
-    ssize_t written_size = 0;
+    ssize_t written_size = 0, rsize;
+    gchar *lastlog_filename = NULL, *datestr, *basename;
+    gint64 last_write_time = G_MININT64, write_time;
+    TLLoggerLogItemData *time_item;
+    GDateTime *dt;
     
     if(user_data==NULL)
     {
@@ -108,24 +184,8 @@ static gpointer tl_logger_log_write_thread(gpointer user_data)
     {
         g_mutex_lock(&(logger_data->cached_log_mutex));
         
-        tail = g_queue_peek_tail_link(logger_data->cached_log_data);
-        if(tail==NULL || logger_data->last_saved_data==tail)
-        {
-            g_usleep(100000);
-            g_mutex_unlock(&(logger_data->cached_log_mutex));
-            continue;
-        }
-        
-        if(logger_data->last_saved_data==NULL)
-        {
-            logger_data->last_saved_data = g_queue_peek_head_link(
-                logger_data->cached_log_data);
-        }
-        else
-        {
-            logger_data->last_saved_data = g_list_next(
-                logger_data->last_saved_data);
-        }
+        logger_data->last_saved_data = g_queue_pop_head_link(
+            logger_data->write_log_queue);
         
         if(logger_data->last_saved_data==NULL)
         {
@@ -137,31 +197,96 @@ static gpointer tl_logger_log_write_thread(gpointer user_data)
         item_data = logger_data->last_saved_data->data;
         if(item_data==NULL)
         {
+            g_list_free_full(logger_data->last_saved_data,
+                (GDestroyNotify)tl_logger_log_item_data_free);
+            logger_data->last_saved_data = NULL;
+            
             g_usleep(100000);
             g_mutex_unlock(&(logger_data->cached_log_mutex));
             continue;
         }
         
+        time_item = g_hash_table_lookup(item_data, "time");
+        if(time_item==NULL)
+        {
+            g_list_free_full(logger_data->last_saved_data,
+                (GDestroyNotify)tl_logger_log_item_data_free);
+            logger_data->last_saved_data = NULL;
+            
+            g_usleep(100000);
+            g_mutex_unlock(&(logger_data->cached_log_mutex));
+            continue;
+        }
+        write_time = time_item->value;
+        
+        if(fd>=0 && write_time < last_write_time)
+        {
+            /* Log time is not monotonic! */
+            close(fd);
+            fd = -1;
+            
+            g_queue_free_full(logger_data->cached_log_data,
+                (GDestroyNotify)g_hash_table_unref);
+            logger_data->cached_log_data = g_queue_new();
+            logger_data->last_saved_data = NULL;
+        }
+        last_write_time = write_time;
+        
         ba = tl_logger_log_to_file_data(item_data);
+        
+        g_queue_push_tail_link(logger_data->cached_log_data,
+            logger_data->last_saved_data);
+        
+        g_mutex_unlock(&(logger_data->cached_log_mutex));
         
         if(fd<0)
         {
-            //fd = open();
+            if(lastlog_filename!=NULL)
+            {
+                g_free(lastlog_filename);
+            }
+            dt = g_date_time_new_from_unix_local(write_time);
+            datestr = g_date_time_format(dt, "%Y%m%d%H%M%S");
+            basename = g_strdup_printf("tbl-%s.tl", datestr);
+            g_free(datestr);
+            g_date_time_unref(dt);
+            
+            lastlog_filename = g_build_filename(
+                TL_LOGGER_STORAGE_BASE_PATH_DEFAULT, basename, NULL);
+            g_free(basename);
+            
+            fd = open(lastlog_filename, O_WRONLY | O_CREAT);
+            written_size = 0;
         }
         
-        if(written_size>=TL_LOGGER_LOG_SIZE_MAXIUM)
+        rsize = write(fd, ba->data, ba->len);
+        g_byte_array_unref(ba);
+        
+        if(rsize>0)
+        {
+            written_size += rsize;
+        }
+        
+        if(rsize<=0 || written_size>=TL_LOGGER_LOG_SIZE_MAXIUM)
         {
             close(fd);
             fd = -1;
             
-            //TODO: Call compress thread to compress old data.
+            g_mutex_lock(&(logger_data->cached_log_mutex));
+            g_queue_free_full(logger_data->cached_log_data,
+                (GDestroyNotify)g_hash_table_unref);
+            logger_data->cached_log_data = g_queue_new();
+            logger_data->last_saved_data = NULL;
+            g_mutex_unlock(&(logger_data->cached_log_mutex));
         }
         
-        
-        g_byte_array_unref(ba);
-        
-        g_mutex_unlock(&(logger_data->cached_log_mutex));
     }
+    
+    if(lastlog_filename!=NULL)
+    {
+        g_free(lastlog_filename);
+    }
+    
     return NULL;
 }
 
@@ -199,7 +324,7 @@ static gboolean tl_logger_log_update_timer_cb(gpointer user_data)
         }
         
         g_mutex_lock(&(logger_data->cached_log_mutex));
-        g_queue_push_tail(logger_data->cached_log_data, dup_data);
+        g_queue_push_tail(logger_data->write_log_queue, dup_data);
         g_mutex_unlock(&(logger_data->cached_log_mutex));
                 
         logger_data->last_timestamp = logger_data->new_timestamp;
@@ -218,6 +343,7 @@ gboolean tl_logger_init(const gchar *storage_base_path)
     
     g_mutex_init(&(g_tl_logger_data.cached_log_mutex));
     g_tl_logger_data.cached_log_data = g_queue_new();
+    g_tl_logger_data.write_log_queue = g_queue_new();
     
     if(storage_base_path!=NULL)
     {
@@ -266,6 +392,12 @@ void tl_logger_uninit()
         g_tl_logger_data.last_log_data = NULL;
     }
     
+    if(g_tl_logger_data.write_log_queue!=NULL)
+    {
+        g_queue_free_full(g_tl_logger_data.write_log_queue,
+            (GDestroyNotify)g_hash_table_unref);
+        g_tl_logger_data.write_log_queue = NULL;
+    }
     if(g_tl_logger_data.cached_log_data!=NULL)
     {
         g_queue_free_full(g_tl_logger_data.cached_log_data,
