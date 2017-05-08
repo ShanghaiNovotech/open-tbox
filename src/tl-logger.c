@@ -13,9 +13,11 @@
 
 #define TL_LOGGER_STORAGE_BASE_PATH_DEFAULT "/var/lib/tbox/log"
 
-#define TL_LOGGER_LOG_ITEM_HEAD_MAGIC (const guint8 *)"TLIH"
-#define TL_LOGGER_LOG_ITEM_TAIL_MAGIC (const guint8 *)"TLIT"
+#define TL_LOGGER_LOG_ITEM_HEAD_MAGIC ((const guint8 *)"TLIH")
+#define TL_LOGGER_LOG_ITEM_TAIL_MAGIC ((const guint8 *)"TLIT")
 #define TL_LOGGER_LOG_SIZE_MAXIUM 8 * 1024 * 1024
+
+#define TL_LOGGER_LOG_PARSE_MAXIUM_SIZE 8 * 1024 * 1024
 
 #define TL_LOGGER_LOG_FREE_SPACE_MINIUM 200UL * 1024 * 1024
 #define TL_LOGGER_LOG_FREE_NODE_MINIUM 2048
@@ -43,6 +45,8 @@ typedef struct _TLLoggerData
     
     GThread *query_thread;
     gboolean query_thread_work_flag;
+    GQueue *query_queue;
+    GMutex query_queue_mutex;
 }TLLoggerData;
 
 typedef struct _TLLoggerFileStat
@@ -50,6 +54,17 @@ typedef struct _TLLoggerFileStat
     gchar *name;
     guint64 size;
 }TLLoggerFileStat;
+
+typedef struct _TLLoggerQueryData
+{
+    gboolean begin_time_set;
+    gint64 begin_time;
+    gboolean end_time_set;
+    gint64 end_time;
+}TLLoggerQueryData;
+
+typedef gboolean (*TLLoggerLogQueryCallback)(TLLoggerData *logger_data,
+    GByteArray *ba, TLLoggerQueryData *query_data);
 
 static TLLoggerData g_tl_logger_data = {0};
 
@@ -132,6 +147,168 @@ static inline guint16 tl_logger_crc16_compute(const guchar *data_p,
     return crc;
 }
 
+static gboolean tl_logger_log_query_from_file(TLLoggerData *logger_data,
+    const gchar *filename, TLLoggerQueryData *query_data,
+    TLLoggerLogQueryCallback callback)
+{
+    GError *error = NULL;
+    GFile *input_file;
+    GZlibDecompressor *decompressor;
+    GFileInputStream *file_istream;
+    GInputStream *decompress_istream;
+    guint8 buffer[4096];
+    gssize read_size;
+    GByteArray *parse_array;
+    guint i;
+    gboolean ret = TRUE;
+    guint32 except_len = 0;
+    guint16 except_crc;
+    guint16 real_crc;
+    
+    if(callback==NULL)
+    {
+        return FALSE;
+    }
+    
+    input_file = g_file_new_for_path(filename);
+    if(input_file==NULL)
+    {
+        return FALSE;
+    }
+    
+    file_istream = g_file_read(input_file, NULL, &error);
+    g_object_unref(input_file);
+    
+    if(file_istream==NULL)
+    {
+        g_warning("TLLogger cannot open input stream from %s: %s", filename,
+            error->message);
+        g_clear_error(&error);
+        return FALSE;
+    }
+    
+    decompressor = g_zlib_decompressor_new(G_ZLIB_COMPRESSOR_FORMAT_ZLIB);
+    decompress_istream = g_converter_input_stream_new(G_INPUT_STREAM(
+        file_istream), G_CONVERTER(decompressor));
+    g_object_unref(file_istream);
+    g_object_unref(decompressor);
+    
+    parse_array = g_byte_array_new();
+    while((read_size=g_input_stream_read(decompress_istream, buffer, 4096,
+        NULL, NULL))>0)
+    {
+        for(i=0;i<read_size;i++)
+        {
+            if(parse_array->len<4 &&
+                buffer[i]==TL_LOGGER_LOG_ITEM_HEAD_MAGIC[parse_array->len])
+            {
+                g_byte_array_append(parse_array, buffer + i, 1);
+            }
+            else if(parse_array->len>=4)
+            {
+                g_byte_array_append(parse_array, buffer + i, 1);
+                
+                if(except_len==0 && parse_array->len>=6)
+                {
+                    memcpy(&except_len, parse_array->data + 4, 4);
+                    except_len = g_ntohl(except_len);
+                }
+                
+                if(parse_array->len>=14 && parse_array->len==except_len &&
+                    memcmp(parse_array->data + parse_array->len - 4,
+                    TL_LOGGER_LOG_ITEM_TAIL_MAGIC, 4)==0)
+                {
+                    /* Parse the data */
+                    memcpy(&except_crc, parse_array->data + 8, 2);
+                    except_crc = g_ntohs(except_crc);
+                    
+                    real_crc = tl_logger_crc16_compute(parse_array->data + 10,
+                        except_len);
+                    
+                    if(except_crc==real_crc)
+                    {
+                        ret = callback(logger_data, parse_array, query_data);
+                    }
+                    else
+                    {
+                        g_warning("TLLogger detected incorrect CRC in "
+                            "log item!");
+                    }
+                    
+                    g_byte_array_unref(parse_array);
+                    parse_array = g_byte_array_new();
+                }
+                
+                if(parse_array->len > except_len+14 || 
+                    parse_array->len > TL_LOGGER_LOG_PARSE_MAXIUM_SIZE)
+                {
+                    g_byte_array_unref(parse_array);
+                    parse_array = g_byte_array_new();
+                }
+            }
+            
+            if(!ret)
+            {
+                break;
+            }
+        }
+        
+        if(!ret)
+        {
+            break;
+        }
+    }
+    
+    g_object_unref(decompress_istream);
+    
+    g_byte_array_unref(parse_array);
+    
+    return TRUE;
+}
+
+static gboolean tl_logger_log_query_from_cache(TLLoggerData *logger_data,
+    TLLoggerQueryData *query_data)
+{
+    GList *list_foreach;
+    GHashTable *log_data;
+    TLLoggerLogItemData *log_item_data;
+    
+    g_mutex_lock(&(logger_data->cached_log_mutex));
+    
+    for(list_foreach=g_queue_peek_head_link(logger_data->cached_log_data);
+        list_foreach!=NULL;list_foreach=g_list_next(list_foreach))
+    {
+        log_data = list_foreach->data;
+        if(log_data==NULL)
+        {
+            continue;
+        }
+        
+        log_item_data = g_hash_table_lookup(log_data, "time");
+        if(log_item_data==NULL)
+        {
+            continue;
+        }
+        
+        if(query_data->end_time_set && query_data->end_time <
+            log_item_data->value)
+        {
+            break;
+        }
+        
+        if(query_data->begin_time_set && query_data->begin_time >
+            log_item_data->value)
+        {
+            continue;
+        }
+        
+        //TODO: Add log item data to results.
+    }
+    
+    g_mutex_unlock(&(logger_data->cached_log_mutex));
+    
+    return TRUE;
+}
 
 /*
  * Log Frame:
@@ -372,9 +549,73 @@ static gboolean tl_logger_log_archive_compress_file(TLLoggerData *logger_data,
     return ret;
 }
 
+static gboolean tl_logger_log_query_file_cb(TLLoggerData *logger_data,
+    GByteArray *ba, TLLoggerQueryData *query_data)
+{
+    struct json_tokener *tokener;
+    struct json_object *root = NULL, *node, *child;
+    guint array_len, i;
+    gboolean ret = TRUE;
+    
+    gint64 log_time;
+    
+    const gchar *json_data = (const gchar *)ba->data + 10;
+    guint json_len = ba->len - 14;
+    
+    tokener = json_tokener_new();
+    root = json_tokener_parse_ex(tokener, json_data, json_len);
+    json_tokener_free(tokener);
+    
+    if(root==NULL)
+    {
+        g_warning("TLLogger failed to parse JSON data!");
+        return FALSE;
+    }
+    
+    array_len = json_object_array_length(root);
+    
+    for(i=0;i<array_len;i++)
+    {
+        node = json_object_array_get_idx(root, i);
+        if(node==NULL)
+        {
+            continue;
+        }
+        
+        json_object_object_get_ex(node, "time", &child);
+        if(child==NULL)
+        {
+            continue;
+        }
+        
+        log_time = json_object_get_int64(child);
+        
+        if(query_data->end_time_set && query_data->end_time < log_time)
+        {
+            ret = FALSE;
+            break;
+        }
+        
+        if(query_data->begin_time_set && query_data->begin_time > log_time)
+        {
+            continue;
+        }
+        
+        //TODO: Added query result.
+    }
+    
+    json_object_put(root);
+    
+    return ret;
+}
+
 static gpointer tl_logger_log_query_thread(gpointer user_data)
 {
     TLLoggerData *logger_data = (TLLoggerData *)user_data;
+    TLLoggerQueryData *query_data;
+    GDir *log_dir;
+    GError *error = NULL;
+    const gchar *filename;
     
     if(user_data==NULL)
     {
@@ -382,6 +623,48 @@ static gpointer tl_logger_log_query_thread(gpointer user_data)
     }
     
     logger_data->query_thread_work_flag = TRUE;
+    
+    while(logger_data->query_thread_work_flag)
+    {
+        g_mutex_lock(&(logger_data->query_queue_mutex));
+        query_data = g_queue_pop_head(logger_data->query_queue);
+        g_mutex_unlock(&(logger_data->query_queue_mutex));
+        
+        if(query_data!=NULL)
+        {
+            G_STMT_START
+            {
+                log_dir = g_dir_open(logger_data->storage_base_path, 0,
+                    &error);
+                if(error!=NULL)
+                {
+                    g_warning("TLLogger cannot open log storage "
+                        "directionary: %s", error->message);
+                    break;
+                }
+                
+                while((filename=g_dir_read_name(log_dir))!=NULL)
+                {
+                    if(g_str_has_suffix(filename, ".tlz"))
+                    {
+                        tl_logger_log_query_from_file(logger_data, filename,
+                            query_data, tl_logger_log_query_file_cb);
+                    }
+                }
+            }
+            G_STMT_END;
+            
+            g_dir_close(log_dir);
+            
+            tl_logger_log_query_from_cache(logger_data, query_data);
+            
+            g_free(query_data);
+        }
+        else
+        {
+            g_usleep(100000);
+        }
+    }
     
     return NULL;
 }
@@ -407,6 +690,7 @@ static gpointer tl_logger_log_archive_thread(gpointer user_data)
     {
         g_warning("TLLogger cannot open log storage directionary: %s",
             error->message);
+        g_clear_error(&error);
         return NULL;
     }
     
@@ -689,8 +973,11 @@ gboolean tl_logger_init(const gchar *storage_base_path)
     }
     
     g_mutex_init(&(g_tl_logger_data.cached_log_mutex));
+    g_mutex_init(&(g_tl_logger_data.query_queue_mutex));
+    
     g_tl_logger_data.cached_log_data = g_queue_new();
     g_tl_logger_data.write_log_queue = g_queue_new();
+    g_tl_logger_data.query_queue = g_queue_new();
     
     if(storage_base_path!=NULL)
     {
@@ -789,6 +1076,12 @@ void tl_logger_uninit()
         g_tl_logger_data.last_log_data = NULL;
     }
     
+    if(g_tl_logger_data.query_queue!=NULL)
+    {
+        g_queue_free_full(g_tl_logger_data.query_queue, g_free);
+        g_tl_logger_data.query_queue = NULL;
+    }
+    
     if(g_tl_logger_data.write_log_queue!=NULL)
     {
         g_queue_free_full(g_tl_logger_data.write_log_queue,
@@ -809,6 +1102,7 @@ void tl_logger_uninit()
     }
     
     g_mutex_clear(&(g_tl_logger_data.cached_log_mutex));
+    g_mutex_clear(&(g_tl_logger_data.query_queue_mutex));
     
     g_tl_logger_data.initialized = FALSE;
 }
