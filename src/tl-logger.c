@@ -22,6 +22,16 @@
 #define TL_LOGGER_LOG_FREE_SPACE_MINIUM 200UL * 1024 * 1024
 #define TL_LOGGER_LOG_FREE_NODE_MINIUM 2048
 
+typedef struct _TLLoggerQueryData
+{
+    gboolean begin_time_set;
+    gint64 begin_time;
+    gboolean end_time_set;
+    gint64 end_time;
+    TLLoggerQueryResultCallback query_result_cb;
+    gpointer query_result_user_data;
+}TLLoggerQueryData;
+
 typedef struct _TLLoggerData
 {
     gboolean initialized;
@@ -46,7 +56,9 @@ typedef struct _TLLoggerData
     GThread *query_thread;
     gboolean query_thread_work_flag;
     GQueue *query_queue;
+    TLLoggerQueryData *query_working_data;
     GMutex query_queue_mutex;
+    gboolean query_work_flag;
 }TLLoggerData;
 
 typedef struct _TLLoggerFileStat
@@ -54,14 +66,6 @@ typedef struct _TLLoggerFileStat
     gchar *name;
     guint64 size;
 }TLLoggerFileStat;
-
-typedef struct _TLLoggerQueryData
-{
-    gboolean begin_time_set;
-    gint64 begin_time;
-    gboolean end_time_set;
-    gint64 end_time;
-}TLLoggerQueryData;
 
 typedef gboolean (*TLLoggerLogQueryCallback)(TLLoggerData *logger_data,
     GByteArray *ba, TLLoggerQueryData *query_data);
@@ -195,7 +199,7 @@ static gboolean tl_logger_log_query_from_file(TLLoggerData *logger_data,
     
     parse_array = g_byte_array_new();
     while((read_size=g_input_stream_read(decompress_istream, buffer, 4096,
-        NULL, NULL))>0)
+        NULL, NULL))>0 && logger_data->query_work_flag)
     {
         for(i=0;i<read_size;i++)
         {
@@ -270,14 +274,16 @@ static gboolean tl_logger_log_query_from_cache(TLLoggerData *logger_data,
     TLLoggerQueryData *query_data)
 {
     GList *list_foreach;
-    GHashTable *log_data;
-    TLLoggerLogItemData *log_item_data;
+    GHashTable *log_data, *dup_table;
+    GHashTableIter iter;
+    TLLoggerLogItemData *log_item_data, *dup_item_data;
+    GSList *query_result_list = NULL, *slist_foreach;
     
     g_mutex_lock(&(logger_data->cached_log_mutex));
     
     for(list_foreach=g_queue_peek_head_link(logger_data->cached_log_data);
         list_foreach!=NULL;list_foreach=g_list_next(list_foreach))
-    {
+    {        
         log_data = list_foreach->data;
         if(log_data==NULL)
         {
@@ -302,10 +308,44 @@ static gboolean tl_logger_log_query_from_cache(TLLoggerData *logger_data,
             continue;
         }
         
-        //TODO: Add log item data to results.
+        dup_table = g_hash_table_new_full(g_str_hash, g_str_equal, NULL,
+            (GDestroyNotify)tl_logger_log_item_data_free);
+        g_hash_table_iter_init(&iter, log_data);
+        while(g_hash_table_iter_next(&iter, NULL, (gpointer *)&log_item_data))
+        {
+            if(log_item_data==NULL)
+            {
+                continue;
+            }
+            
+            dup_item_data = tl_logger_log_item_data_dup(log_item_data);
+            g_hash_table_replace(dup_table, dup_item_data->name, dup_item_data);
+        }
+        
+        query_result_list = g_slist_prepend(query_result_list, dup_table);
     }
     
     g_mutex_unlock(&(logger_data->cached_log_mutex));
+    
+    for(slist_foreach=query_result_list;slist_foreach!=NULL;
+        slist_foreach=g_slist_next(slist_foreach))
+    {
+        dup_table = slist_foreach->data;
+        if(dup_table==NULL)
+        {
+            continue;
+        }
+        
+        if(query_data->query_result_cb!=NULL)
+        {
+            query_data->query_result_cb(query_data->begin_time_set,
+                query_data->begin_time, query_data->end_time_set,
+                query_data->end_time, dup_table,
+                query_data->query_result_user_data);
+        }
+    }
+    
+    g_slist_free_full(query_result_list, (GDestroyNotify)g_hash_table_unref);
     
     return TRUE;
 }
@@ -556,8 +596,14 @@ static gboolean tl_logger_log_query_file_cb(TLLoggerData *logger_data,
     struct json_object *root = NULL, *node, *child;
     guint array_len, i;
     gboolean ret = TRUE;
+    gboolean data_completed = TRUE;
+    const gchar *name;
     
-    gint64 log_time;
+    GHashTable *log_table;
+    TLLoggerLogItemData *log_item_data;
+    gint64 log_value;
+    gint log_source;
+    gdouble log_unit;
     
     const gchar *json_data = (const gchar *)ba->data + 10;
     guint json_len = ba->len - 14;
@@ -573,6 +619,8 @@ static gboolean tl_logger_log_query_file_cb(TLLoggerData *logger_data,
     }
     
     array_len = json_object_array_length(root);
+    log_table = g_hash_table_new_full(g_str_hash, g_str_equal, NULL,
+        (GDestroyNotify)tl_logger_log_item_data_free);
     
     for(i=0;i<array_len;i++)
     {
@@ -582,29 +630,90 @@ static gboolean tl_logger_log_query_file_cb(TLLoggerData *logger_data,
             continue;
         }
         
-        json_object_object_get_ex(node, "time", &child);
+        json_object_object_get_ex(node, "name", &child);
         if(child==NULL)
         {
             continue;
         }
         
-        log_time = json_object_get_int64(child);
+        name = json_object_get_string(child);
         
-        if(query_data->end_time_set && query_data->end_time < log_time)
+        json_object_object_get_ex(node, "value", &child);
+        if(child!=NULL)
         {
-            ret = FALSE;
-            break;
+            log_value = json_object_get_int64(child);
+        }
+        else
+        {
+            log_value = 0;
         }
         
-        if(query_data->begin_time_set && query_data->begin_time > log_time)
+        json_object_object_get_ex(node, "unit", &child);
+        if(child!=NULL)
         {
-            continue;
+            log_unit = json_object_get_double(child);
+        }
+        else
+        {
+            log_unit = 1.0;
         }
         
-        //TODO: Added query result.
+        json_object_object_get_ex(node, "source", &child);
+        if(child!=NULL)
+        {
+            log_source = json_object_get_int(child);
+        }
+        else
+        {
+            log_source = 0;
+        }
+        
+        if(g_strcmp0(name, "time")==0)
+        {
+            log_value = json_object_get_int64(child);
+        
+            if(query_data->end_time_set && query_data->end_time < log_value)
+            {
+                ret = FALSE;
+                data_completed = FALSE;
+                break;
+            }
+        
+            if(query_data->begin_time_set &&
+                query_data->begin_time > log_value)
+            {
+                data_completed = FALSE;
+                break;
+            }
+        }
+        
+        log_item_data = g_new0(TLLoggerLogItemData, 1);
+        log_item_data->name = g_strdup(name);
+        log_item_data->value = log_value;
+        log_item_data->source = log_source;
+        log_item_data->unit = log_unit;
+        
+        g_hash_table_replace(log_table, log_item_data->name, log_item_data);
     }
     
     json_object_put(root);
+    
+    if(data_completed && !g_hash_table_contains(log_table, "time"))
+    {
+        data_completed = FALSE;
+    }
+    
+    if(data_completed)
+    {
+        if(query_data->query_result_cb!=NULL)
+        {
+            query_data->query_result_cb(query_data->begin_time_set,
+                query_data->begin_time, query_data->end_time_set,
+                query_data->end_time, log_table,
+                query_data->query_result_user_data);
+        }
+    }
+    g_hash_table_unref(log_table);
     
     return ret;
 }
@@ -628,6 +737,8 @@ static gpointer tl_logger_log_query_thread(gpointer user_data)
     {
         g_mutex_lock(&(logger_data->query_queue_mutex));
         query_data = g_queue_pop_head(logger_data->query_queue);
+        logger_data->query_working_data = query_data;
+        logger_data->query_work_flag = TRUE;
         g_mutex_unlock(&(logger_data->query_queue_mutex));
         
         if(query_data!=NULL)
@@ -643,7 +754,8 @@ static gpointer tl_logger_log_query_thread(gpointer user_data)
                     break;
                 }
                 
-                while((filename=g_dir_read_name(log_dir))!=NULL)
+                while(logger_data->query_work_flag &&
+                    (filename=g_dir_read_name(log_dir))!=NULL)
                 {
                     if(g_str_has_suffix(filename, ".tlz"))
                     {
@@ -658,6 +770,7 @@ static gpointer tl_logger_log_query_thread(gpointer user_data)
             
             tl_logger_log_query_from_cache(logger_data, query_data);
             
+            logger_data->query_working_data = NULL;
             g_free(query_data);
         }
         else
@@ -1148,4 +1261,55 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
 GHashTable *tl_logger_current_data_get()
 {
     return g_tl_logger_data.last_log_data;
+}
+
+void *tl_logger_log_query_start(gboolean begin_time_set, gint64 begin_time,
+    gboolean end_time_set, gint64 end_time,
+    TLLoggerQueryResultCallback callback, gpointer user_data)
+{
+    TLLoggerQueryData *query_data;
+    
+    if(!g_tl_logger_data.initialized)
+    {
+        return NULL;
+    }
+    
+    query_data = g_new0(TLLoggerQueryData, 1);
+    query_data->begin_time_set = begin_time_set;
+    query_data->end_time_set = end_time_set;
+    query_data->begin_time = begin_time;
+    query_data->end_time = end_time;
+    query_data->query_result_cb = callback;
+    query_data->query_result_user_data = user_data;
+    
+    g_mutex_lock(&(g_tl_logger_data.query_queue_mutex));
+    g_queue_push_tail(g_tl_logger_data.query_queue, query_data);
+    
+    g_mutex_unlock(&(g_tl_logger_data.query_queue_mutex));
+    
+    return query_data;
+}
+
+void tl_logger_log_query_stop(void *handler)
+{
+    if(!g_tl_logger_data.initialized)
+    {
+        return;
+    }
+    
+    g_mutex_lock(&(g_tl_logger_data.query_queue_mutex));
+    if(handler==NULL || handler==g_tl_logger_data.query_working_data)
+    {
+        g_tl_logger_data.query_work_flag = FALSE;
+    }
+    if(handler!=NULL)
+    {
+        g_queue_remove(g_tl_logger_data.query_queue, handler);
+    }
+    else
+    {
+        g_queue_free_full(g_tl_logger_data.query_queue, g_free);
+        g_tl_logger_data.query_queue = g_queue_new();
+    }
+    g_mutex_unlock(&(g_tl_logger_data.query_queue_mutex));
 }
