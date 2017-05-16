@@ -10,7 +10,9 @@ typedef enum
     TL_PARSER_PRIMARY_STATE_NONE,
     TL_PARSER_PRIMARY_STATE_SIGNAL,
     TL_PARSER_PRIMARY_STATE_NAME,
-    TL_PARSER_PRIMARY_STATE_REV
+    TL_PARSER_PRIMARY_STATE_REV,
+    TL_PARSER_PRIMARY_STATE_BATTERY_CODE_LEN,
+    TL_PARSER_PRIMARY_STATE_BATTERY_CODE
 }TLParserPrimaryState;
 
 typedef struct _TLParserData
@@ -23,6 +25,9 @@ typedef struct _TLParserData
     gchar *name;
     guint rev;
     gboolean use_ext_id;
+    guint8 single_bat_code_len;
+    gchar *bat_code;
+    guint bat_code_total_len;
 }TLParserData;
 
 static TLParserData g_tl_parser_data = {0};
@@ -154,6 +159,18 @@ static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
     {
         parser_data->primary_state = TL_PARSER_PRIMARY_STATE_REV;
     }
+    else if(parser_data->data_flag && g_strcmp0(element_name, "batcodelen")==0)
+    {
+        parser_data->primary_state = TL_PARSER_PRIMARY_STATE_BATTERY_CODE_LEN;
+    }
+    else if(parser_data->data_flag && g_strcmp0(element_name, "batcode")==0)
+    {
+        parser_data->primary_state = TL_PARSER_PRIMARY_STATE_BATTERY_CODE;
+    }
+    else
+    {
+        parser_data->primary_state = TL_PARSER_PRIMARY_STATE_NONE;
+    }
 }
 
 static void tl_parser_markup_parser_end_element(GMarkupParseContext *context,
@@ -184,7 +201,49 @@ static void tl_parser_markup_parser_end_element(GMarkupParseContext *context,
 static void tl_parser_markup_parser_text(GMarkupParseContext *context,
     const gchar *text, gsize text_len, gpointer user_data, GError **error)
 {
+    TLParserData *parser_data = (TLParserData *)user_data;
     
+    if(user_data==NULL)
+    {
+        return;
+    }
+    
+    switch(parser_data->primary_state)
+    {
+        case TL_PARSER_PRIMARY_STATE_NAME:
+        {
+            if(parser_data->name!=NULL)
+            {
+                g_free(parser_data->name);
+            }
+            parser_data->name = g_strndup(text, text_len);
+            break;
+        }
+        case TL_PARSER_PRIMARY_STATE_REV:
+        {
+            sscanf(text, "%u", &(parser_data->rev));
+            break;
+        }
+        case TL_PARSER_PRIMARY_STATE_BATTERY_CODE_LEN:
+        {
+            sscanf(text, "%u", &(parser_data->single_bat_code_len));
+            break;
+        }
+        case TL_PARSER_PRIMARY_STATE_BATTERY_CODE:
+        {
+            if(parser_data->bat_code!=NULL)
+            {
+                g_free(parser_data->bat_code);
+            }
+            parser_data->bat_code = g_memdup(text, text_len);
+            parser_data->bat_code_total_len = text_len;
+            break;
+        }
+        default:
+        {
+            break;
+        }
+    }
 }
 
 static GMarkupParser g_tl_parser_markup_parser =
@@ -383,4 +442,19 @@ gboolean tl_parser_parse_can_data(const gchar *device,
     }
     
     return parsed;
+}
+
+const gchar *tl_parser_battery_code_get(guint8 *single_bat_code_len,
+    guint *bat_code_total_len)
+{
+    if(single_bat_code_len!=NULL)
+    {
+        *single_bat_code_len = g_tl_parser_data.single_bat_code_len;
+    }
+    if(bat_code_total_len!=NULL)
+    {
+        *bat_code_total_len = g_tl_parser_data.bat_code_total_len;
+    }
+    return g_tl_parser_data.bat_code;
+    
 }

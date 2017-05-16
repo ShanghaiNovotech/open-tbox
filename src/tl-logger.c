@@ -1258,8 +1258,26 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
     g_tl_logger_data.new_timestamp = g_get_monotonic_time();
 }
 
-GHashTable *tl_logger_current_data_get()
+GHashTable *tl_logger_current_data_get(gboolean *updated)
 {
+    static gint64 latest_timestamp = 0;
+    
+    if(g_tl_logger_data.new_timestamp!=latest_timestamp)
+    {
+        if(updated!=NULL)
+        {
+            *updated = TRUE;
+        }
+        latest_timestamp = g_tl_logger_data.new_timestamp;
+    }
+    else
+    {
+        if(updated!=NULL)
+        {
+            *updated = FALSE;
+        }
+    }
+    
     return g_tl_logger_data.last_log_data;
 }
 
