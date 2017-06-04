@@ -1,4 +1,5 @@
 #include <string.h>
+#include <gio/gio.h>
 #include "tl-net.h"
 #include "tl-logger.h"
 #include "tl-parser.h"
@@ -7,14 +8,34 @@ typedef struct _TLNetData
 {
     gboolean initialized;
     gchar *conf_file_path;
-    int fd;
+    
+    GSocketClient *vehicle_client;
+    GSocketConnection *vehicle_connection;
+    GInputStream *vehicle_input_stream;
+    GOutputStream *vehicle_output_stream;
+    GSource *vehicle_input_source;
+    GSource *vehicle_output_source;
+    
+    GByteArray *vehicle_write_buffer;
+    GQueue *vehicle_write_queue;
+    GByteArray *vehicle_packet_read_buffer;
+    gssize vehicle_packet_read_expect_length;
+    
     GList *vehicle_server_list;
-    gchar *pending_vehicle_server;
+    GList *current_vehicle_server;
+    
     gchar *vin;
     gchar *iccid;
     guint16 session;
     
-    gboolean vehicle_login_state;
+    guint vehicle_connection_state;
+    
+    guint vehicle_connection_check_timeout;
+    
+    guint vehicle_connection_retry_count;
+    guint vehicle_connection_retry_maximum;
+    guint vehicle_connection_retry_cycle;
+    gint64 vehicle_connection_login_request_timestamp;
 }TLNetData;
 
 typedef enum
@@ -273,7 +294,372 @@ static GByteArray *tl_net_login_packet_build(TLNetData *net_data)
     return ret;
 }
 
+static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
+    GObject *pollable_stream, gpointer user_data)
+{
+    TLNetData *net_data = (TLNetData *)user_data;
+    GError *error = NULL;
+    gboolean ret = FALSE;
+    gboolean disconnected = FALSE;
+    gssize write_size;
+    const gchar *host = NULL;
+    
+    if(net_data->current_vehicle_server!=NULL)
+    {
+        host = net_data->current_vehicle_server->data;
+    }
+    
+    do
+    {
+        if(net_data->vehicle_write_buffer==NULL)
+        {
+            net_data->vehicle_write_buffer = g_queue_pop_head(
+                net_data->vehicle_write_queue);
+        }
+        
+        if(net_data->vehicle_write_buffer==NULL)
+        {
+            break;
+        }
+        
+        while((write_size=g_pollable_output_stream_write_nonblocking(
+            G_POLLABLE_OUTPUT_STREAM(net_data->vehicle_output_stream),
+            net_data->vehicle_write_buffer->data,
+            net_data->vehicle_write_buffer->len, NULL, &error))>0 &&
+            error==NULL)
+        {
+            if(write_size>=net_data->vehicle_write_buffer->len)
+            {
+                g_byte_array_unref(net_data->vehicle_write_buffer);
+                net_data->vehicle_write_buffer = NULL;
+                break;
+            }
+            else
+            {
+                g_byte_array_remove_range(net_data->vehicle_write_buffer, 0,
+                    write_size);
+            }
+        }
+        
+        if(error!=NULL)
+        {
+            if(error->code==G_IO_ERROR_WOULD_BLOCK)
+            {
+                ret = TRUE;
+            }
+            else
+            {
+                g_message("TLNet disconnected from host %s with error: %s",
+                    host, error->message);
+                disconnected = TRUE;
+            }
+            g_clear_error(&error);
+            break;
+        }
+    }
+    while(net_data->vehicle_write_buffer!=NULL ||
+        !g_queue_is_empty(net_data->vehicle_write_queue));
 
+    if(!ret)
+    {
+        g_source_destroy(net_data->vehicle_output_source);
+        g_source_unref(net_data->vehicle_output_source);
+        net_data->vehicle_output_source = NULL;
+    }
+    
+    if(disconnected)
+    {
+        //TODO: Disconnect from server.
+    }
+    
+    return ret;
+}
+
+
+static gboolean tl_net_vehicle_connection_input_pollable_source_cb(
+    GObject *pollable_stream, gpointer user_data)
+{
+    TLNetData *net_data = (TLNetData *)user_data;
+    GError *error = NULL;
+    const gchar *host = NULL;
+    gssize read_size;
+    gssize i, j;
+    guint16 expect_len;
+    guint8 checksum, rchecksum;
+    gchar vin_code[18] = {0};
+    gchar buffer[4097];
+    
+    if(user_data==NULL)
+    {
+        return FALSE;
+    }
+    
+    if(net_data->current_vehicle_server!=NULL)
+    {
+        host = net_data->current_vehicle_server->data;
+    }
+    
+    while((read_size=g_pollable_input_stream_read_nonblocking(
+        G_POLLABLE_INPUT_STREAM(pollable_stream), buffer, 4096,
+        NULL, &error))>0 && error==NULL)
+    {
+        for(i=0;i<read_size;i++)
+        {
+            if(net_data->vehicle_packet_read_buffer->len==0)
+            {
+                if(buffer[i]=='#')
+                {
+                    g_byte_array_append(net_data->vehicle_packet_read_buffer,
+                        (const guint8 *)"#", 1);
+                }
+            }
+            else if(net_data->vehicle_packet_read_buffer->len==1)
+            {
+                if(buffer[i]=='#')
+                {
+                    g_byte_array_append(net_data->vehicle_packet_read_buffer,
+                        (const guint8 *)"#", 1);
+                    net_data->vehicle_packet_read_expect_length = 24;
+                }
+                else
+                {
+                    net_data->vehicle_packet_read_buffer->len = 0;
+                }
+            }
+            else if(net_data->vehicle_packet_read_buffer->len>=2)
+            {
+                g_byte_array_append(net_data->vehicle_packet_read_buffer,
+                    (const guint8 *)buffer+i, 1);
+                
+                if(net_data->vehicle_packet_read_buffer->len >
+                    net_data->vehicle_packet_read_expect_length+1)
+                {
+                    net_data->vehicle_packet_read_buffer->len = 0;
+                    net_data->vehicle_packet_read_expect_length = 0;
+                }
+                else if(net_data->vehicle_packet_read_buffer->len==24)
+                {
+                    memcpy(&expect_len,
+                        net_data->vehicle_packet_read_buffer->data + 22, 2);
+                    expect_len = g_ntohs(expect_len);
+                    
+                    if(expect_len>65531)
+                    {
+                        expect_len = 65531;
+                    }
+                    
+                    net_data->vehicle_packet_read_expect_length = (guint)
+                        expect_len + 24;
+                }
+                else if(net_data->vehicle_packet_read_buffer->len==
+                    net_data->vehicle_packet_read_expect_length+1)
+                {
+                    /* Parse packet data. */
+                    checksum = net_data->vehicle_packet_read_buffer->data[
+                        net_data->vehicle_packet_read_expect_length];
+                    rchecksum = 0;
+                    for(j=2;j<net_data->vehicle_packet_read_expect_length;
+                        j++)
+                    {
+                        rchecksum ^=
+                            net_data->vehicle_packet_read_buffer->data[j];
+                    }
+                    
+                    if(rchecksum==checksum)
+                    {
+                        memcpy(vin_code,
+                            net_data->vehicle_packet_read_buffer->data+4, 17);
+                        /*
+                        tl_net_packet_parse(net_data, connection_data,
+                            connection_data->packet_read_buffer->data[2],
+                            connection_data->packet_read_buffer->data[3],
+                            vin_code,
+                            connection_data->packet_read_buffer->data[21],
+                            connection_data->packet_read_buffer->data+24,
+                            connection_data->packet_read_expect_length-24);
+                        */
+                    }
+                    else
+                    {
+                        g_warning("TLNet got a packet with checksum error!");
+                    }
+                    
+                    net_data->vehicle_packet_read_expect_length = 0;
+                    net_data->vehicle_packet_read_buffer->len = 0;
+                }
+            }
+        }
+    }
+    
+    if(error!=NULL && error->code==G_IO_ERROR_WOULD_BLOCK)
+    {
+        g_clear_error(&error);
+        return TRUE;
+    }
+    else
+    {
+        if(error==NULL)
+        {
+            g_message("TLNet disconnected from host %s normally.", host);
+        }
+        else
+        {
+            g_message("TLNet disconnected from host %s with error: %s",
+                host, error->message);
+            g_clear_error(&error);
+        }
+        
+        //TODO: Disconnect from server.
+        
+        return FALSE;
+    }
+    
+    return TRUE;
+}
+
+static void tl_net_vehicle_connection_packet_output_request(
+    TLNetData *net_data, GByteArray *packet)
+{
+    if(net_data->vehicle_output_source==NULL)
+    {
+        net_data->vehicle_output_source =
+            g_pollable_output_stream_create_source(
+            G_POLLABLE_OUTPUT_STREAM(net_data->vehicle_output_stream), NULL);
+        if(net_data->vehicle_output_source!=NULL)
+        {
+            g_source_set_callback(net_data->vehicle_output_source,
+                (GSourceFunc)
+                tl_net_vehicle_connection_output_pollable_source_cb, net_data,
+                NULL);
+            g_source_attach(net_data->vehicle_output_source, NULL);
+        }
+    }
+    g_queue_push_tail(net_data->vehicle_write_queue, g_byte_array_ref(packet));
+}
+
+static void tl_net_vehicle_connect_host_async_cb(GObject *source,
+    GAsyncResult *res, gpointer user_data)
+{
+    TLNetData *net_data = (TLNetData *)user_data;
+    GSocketConnection *connection;
+    GError *error = NULL;
+    const gchar *host = NULL;
+    
+    if(user_data==NULL)
+    {
+        return;
+    }
+    
+    if(net_data->current_vehicle_server!=NULL)
+    {
+        host = net_data->current_vehicle_server->data;
+    }
+    
+    connection = g_socket_client_connect_to_host_finish(G_SOCKET_CLIENT(
+        source), res, &error);
+    if(connection!=NULL)
+    {
+        net_data->vehicle_connection = connection;
+        net_data->vehicle_connection_state = 2;
+        net_data->vehicle_connection_retry_count = 0;
+        
+        net_data->vehicle_input_stream = g_io_stream_get_input_stream(
+            G_IO_STREAM(connection));
+        net_data->vehicle_output_stream = g_io_stream_get_output_stream(
+            G_IO_STREAM(connection));
+        
+        if(net_data->vehicle_input_source!=NULL)
+        {
+            g_source_destroy(net_data->vehicle_input_source);
+            g_source_unref(net_data->vehicle_input_source);
+        }    
+        net_data->vehicle_input_source = g_pollable_input_stream_create_source(
+            G_POLLABLE_INPUT_STREAM(net_data->vehicle_input_stream), NULL);
+        if(net_data->vehicle_input_source!=NULL)
+        {
+            g_source_set_callback(net_data->vehicle_input_source, (GSourceFunc)
+                tl_net_vehicle_connection_input_pollable_source_cb, net_data,
+                NULL);
+            g_source_attach(net_data->vehicle_input_source, NULL);
+        }
+        if(net_data->vehicle_output_source!=NULL)
+        {
+            g_source_destroy(net_data->vehicle_output_source);
+            g_source_unref(net_data->vehicle_output_source);
+            net_data->vehicle_output_source = NULL;
+        }
+        
+        g_message("TLNet connected to host %s.", host);
+    }
+    else
+    {
+        net_data->vehicle_connection_state = 0;
+        
+        if(error!=NULL)
+        {
+            g_warning("TLNet failed to connect to host %s: %s!", host,
+                error->message);
+        }
+        else
+        {
+            g_warning("TLNet failed to connect to host %s with unknown "
+                "error!", host);
+        }
+        
+        if(net_data->current_vehicle_server!=NULL)
+        {
+            net_data->current_vehicle_server = g_list_next(
+                net_data->current_vehicle_server);
+        }
+    }
+    g_clear_error(&error);
+}
+
+static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
+{
+    TLNetData *net_data = (TLNetData *)user_data;
+    const gchar *server_host;
+    
+    if(user_data==NULL)
+    {
+        return FALSE;
+    }
+    
+    switch(net_data->vehicle_connection_state)
+    {
+        case 2:
+        {
+            
+            break;
+        }
+        case 0:
+        {
+            if(net_data->vehicle_server_list==NULL)
+            {
+                break;
+            }
+    
+            if(net_data->current_vehicle_server==NULL)
+            {
+                net_data->current_vehicle_server =
+                    net_data->vehicle_server_list;
+            }
+    
+            server_host = net_data->current_vehicle_server->data;
+    
+            net_data->vehicle_connection_state = 1;
+            g_socket_client_connect_to_host_async(net_data->vehicle_client,
+                server_host, 0, NULL, tl_net_vehicle_connect_host_async_cb,
+                net_data);
+        }
+        default:
+        {
+            break;
+        }
+    }
+    
+    return TRUE;
+}
 
 gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     const gchar *conf_path, const gchar *fallback_vehicle_server_host,
@@ -285,6 +671,29 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
         return TRUE;
     }
     
+    g_tl_net_data.vehicle_connection_retry_maximum = 3;
+    g_tl_net_data.vehicle_connection_retry_cycle = 10;
+    g_tl_net_data.vehicle_connection_state = 0;
+    
+    g_tl_net_data.vehicle_packet_read_buffer = g_byte_array_new();
+    g_tl_net_data.vehicle_write_queue = g_queue_new();
+    
+    if(fallback_vehicle_server_host!=NULL)
+    {
+        if(fallback_vehicle_server_port!=0)
+        {
+            g_tl_net_data.vehicle_server_list = g_list_prepend(
+                g_tl_net_data.vehicle_server_list, g_strdup_printf("%s:%u",
+                fallback_vehicle_server_host, fallback_vehicle_server_port));
+        }
+        else
+        {
+            g_tl_net_data.vehicle_server_list = g_list_prepend(
+                g_tl_net_data.vehicle_server_list, g_strdup(
+                fallback_vehicle_server_host));
+        }
+    }
+    
     if(conf_path==NULL)
     {
         conf_path = TL_NET_CONF_PATH_DEFAULT;
@@ -294,8 +703,13 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     tl_net_config_load(&g_tl_net_data, g_tl_net_data.conf_file_path);
     
     
+    g_tl_net_data.vehicle_client = g_socket_client_new();
+    g_socket_client_set_timeout(g_tl_net_data.vehicle_client, 60);
     
+    g_tl_net_data.current_vehicle_server = g_tl_net_data.vehicle_server_list;
     
+    g_tl_net_data.vehicle_connection_check_timeout = g_timeout_add_seconds(5,
+        tl_net_vehicle_connection_check_timeout_cb, &g_tl_net_data);
     
     g_tl_net_data.initialized = TRUE;
     
@@ -309,10 +723,64 @@ void tl_net_uninit()
         return;
     }
     
+    if(g_tl_net_data.vehicle_connection_check_timeout>0)
+    {
+        g_source_remove(g_tl_net_data.vehicle_connection_check_timeout);
+        g_tl_net_data.vehicle_connection_check_timeout = 0;
+    }
+    if(g_tl_net_data.vehicle_input_source!=NULL)
+    {
+        g_source_destroy(g_tl_net_data.vehicle_input_source);
+        g_source_unref(g_tl_net_data.vehicle_input_source);
+        g_tl_net_data.vehicle_input_source = NULL;
+    }
+    if(g_tl_net_data.vehicle_output_source!=NULL)
+    {
+        g_source_destroy(g_tl_net_data.vehicle_output_source);
+        g_source_unref(g_tl_net_data.vehicle_output_source);
+        g_tl_net_data.vehicle_output_source = NULL;
+    }
+    
     if(g_tl_net_data.conf_file_path!=NULL)
     {
         g_free(g_tl_net_data.conf_file_path);
         g_tl_net_data.conf_file_path = NULL;
+    }
+    
+    if(g_tl_net_data.vehicle_connection!=NULL)
+    {
+        g_object_unref(g_tl_net_data.vehicle_connection);
+        g_tl_net_data.vehicle_connection = NULL;
+    }
+    
+    if(g_tl_net_data.vehicle_client!=NULL)
+    {
+        g_object_unref(g_tl_net_data.vehicle_client);
+        g_tl_net_data.vehicle_client = NULL;
+    }
+    
+    if(g_tl_net_data.vehicle_server_list!=NULL)
+    {
+        g_list_free_full(g_tl_net_data.vehicle_server_list, g_free);
+        g_tl_net_data.vehicle_server_list = NULL;
+    }
+    
+    if(g_tl_net_data.vehicle_write_buffer!=NULL)
+    {
+        g_byte_array_unref(g_tl_net_data.vehicle_write_buffer);
+        g_tl_net_data.vehicle_write_buffer = NULL;
+    }
+    if(g_tl_net_data.vehicle_packet_read_buffer!=NULL)
+    {
+        g_byte_array_unref(g_tl_net_data.vehicle_packet_read_buffer);
+        g_tl_net_data.vehicle_packet_read_buffer = NULL;
+    }
+    
+    if(g_tl_net_data.vehicle_write_queue!=NULL)
+    {
+        g_queue_free_full(g_tl_net_data.vehicle_write_queue,
+            (GDestroyNotify)g_byte_array_unref);
+        g_tl_net_data.vehicle_write_queue = NULL;
     }
     
     g_tl_net_data.initialized = FALSE;
