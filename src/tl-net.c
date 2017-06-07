@@ -17,6 +17,7 @@ typedef struct _TLNetData
     GSource *vehicle_output_source;
     
     GByteArray *vehicle_write_buffer;
+    gboolean vehicle_write_request_answer;
     GQueue *vehicle_write_queue;
     GByteArray *vehicle_packet_read_buffer;
     gssize vehicle_packet_read_expect_length;
@@ -36,7 +37,29 @@ typedef struct _TLNetData
     guint vehicle_connection_retry_maximum;
     guint vehicle_connection_retry_cycle;
     gint64 vehicle_connection_login_request_timestamp;
+    
+    guint vehicle_connection_answer_timeout;
+    gint64 vehicle_connection_request_timestamp;
+    
+    guint vehicle_connection_heartbeat_timeout;
+    gint64 vehicle_connection_heartbeat_timestamp;
 }TLNetData;
+
+typedef struct _TLNetWriteBufferData
+{
+    GByteArray *buffer;
+    gboolean request_answer;
+}TLNetWriteBufferData;
+
+typedef enum
+{
+    TL_NET_CONNECTION_STATE_IDLE = 0,
+    TL_NET_CONNECTION_STATE_CONNECTING = 1,
+    TL_NET_CONNECTION_STATE_CONNECTED = 2,
+    TL_NET_CONNECTION_STATE_LOGINING = 3,
+    TL_NET_CONNECTION_STATE_LOGINED = 4,
+    TL_NET_CONNECTION_STATE_ANSWER_PENDING = 5
+}TLNetConnectionState;
 
 typedef enum
 {
@@ -46,6 +69,11 @@ typedef enum
     TL_NET_COMMAND_TYPE_VEHICLE_LOGOUT = 0x4,
     TL_NET_COMMAND_TYPE_PLATFORM_LOGIN = 0x5,
     TL_NET_COMMAND_TYPE_PLATFORM_LOGOUT = 0x6,
+    TL_NET_COMMAND_TYPE_CLIENT_HEARTBEAT = 0x7,
+    TL_NET_COMMAND_TYPE_SET_TIME = 0x8,
+    TL_NET_COMMAND_TYPE_QUERY = 0x80,
+    TL_NET_COMMAND_TYPE_SETUP = 0x81,
+    TL_NET_COMMAND_TYPE_TERMINAL_CONTROL = 0x82
 }TLNetCommandType;
 
 typedef enum
@@ -79,6 +107,29 @@ typedef enum
 static TLNetData g_tl_net_data = {0};
 
 #define TL_NET_CONF_PATH_DEFAULT "/var/lib/tbox/conf"
+
+static TLNetWriteBufferData *tl_net_write_buffer_data_new(GByteArray *ba)
+{
+    TLNetWriteBufferData *data;
+    
+    data = g_new0(TLNetWriteBufferData, 1);
+    data->buffer = g_byte_array_ref(ba);
+    
+    return data;
+}
+
+static void tl_net_write_buffer_data_free(TLNetWriteBufferData *data)
+{
+    if(data==NULL)
+    {
+        return;
+    }
+    if(data->buffer!=NULL)
+    {
+        g_byte_array_unref(data->buffer);
+    }
+    g_free(data);
+}
 
 static gboolean tl_net_config_load(TLNetData *net_data,
     const gchar *conf_file)
@@ -294,6 +345,51 @@ static GByteArray *tl_net_login_packet_build(TLNetData *net_data)
     return ret;
 }
 
+static GByteArray *tl_net_heartbeat_packet_build(TLNetData *net_data)
+{
+    GByteArray *ba;
+    
+    ba = tl_net_packet_build(TL_NET_COMMAND_TYPE_CLIENT_HEARTBEAT,
+        TL_NET_ANSWER_TYPE_COMMAND, (const guint8 *)net_data->vin,
+        strlen(net_data->vin), TL_NET_PACKET_ENCRYPTION_TYPE_NONE, NULL);
+        
+    return ba;
+}
+
+static void tl_net_vehicle_connection_disconnect(TLNetData *net_data)
+{
+    if(net_data->vehicle_input_source!=NULL)
+    {
+        g_source_destroy(net_data->vehicle_input_source);
+        g_source_unref(net_data->vehicle_input_source);
+        net_data->vehicle_input_source = NULL;
+    }
+    if(net_data->vehicle_output_source!=NULL)
+    {
+        g_source_destroy(net_data->vehicle_output_source);
+        g_source_unref(net_data->vehicle_output_source);
+        net_data->vehicle_output_source = NULL;
+    }
+    if(net_data->vehicle_connection!=NULL)
+    {
+        g_object_unref(net_data->vehicle_connection);
+        net_data->vehicle_connection = NULL;
+    }
+    if(net_data->vehicle_write_buffer!=NULL)
+    {
+        g_byte_array_unref(net_data->vehicle_write_buffer);
+        net_data->vehicle_write_buffer = NULL;
+    }
+    if(net_data->vehicle_write_queue!=NULL)
+    {
+        g_queue_free_full(net_data->vehicle_write_queue,
+            (GDestroyNotify)tl_net_write_buffer_data_free);
+        net_data->vehicle_write_queue = g_queue_new();
+    }
+    
+    net_data->vehicle_connection_state = TL_NET_CONNECTION_STATE_IDLE;
+}
+
 static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
     GObject *pollable_stream, gpointer user_data)
 {
@@ -301,8 +397,10 @@ static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
     GError *error = NULL;
     gboolean ret = FALSE;
     gboolean disconnected = FALSE;
+    gboolean wait_request = FALSE;
     gssize write_size;
     const gchar *host = NULL;
+    TLNetWriteBufferData *write_buffer_data;
     
     if(net_data->current_vehicle_server!=NULL)
     {
@@ -313,8 +411,13 @@ static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
     {
         if(net_data->vehicle_write_buffer==NULL)
         {
-            net_data->vehicle_write_buffer = g_queue_pop_head(
+            write_buffer_data = g_queue_pop_head(
                 net_data->vehicle_write_queue);
+            net_data->vehicle_write_buffer = g_byte_array_ref(
+                write_buffer_data->buffer);
+            net_data->vehicle_write_request_answer =
+                write_buffer_data->request_answer;
+            tl_net_write_buffer_data_free(write_buffer_data);
         }
         
         if(net_data->vehicle_write_buffer==NULL)
@@ -330,8 +433,15 @@ static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
         {
             if(write_size>=net_data->vehicle_write_buffer->len)
             {
-                g_byte_array_unref(net_data->vehicle_write_buffer);
-                net_data->vehicle_write_buffer = NULL;
+                if(net_data->vehicle_write_request_answer)
+                {
+                    wait_request = TRUE;
+                }
+                else
+                {
+                    g_byte_array_unref(net_data->vehicle_write_buffer);
+                    net_data->vehicle_write_buffer = NULL;
+                }
                 break;
             }
             else
@@ -356,6 +466,11 @@ static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
             g_clear_error(&error);
             break;
         }
+        
+        if(wait_request)
+        {
+            break;
+        }
     }
     while(net_data->vehicle_write_buffer!=NULL ||
         !g_queue_is_empty(net_data->vehicle_write_queue));
@@ -369,12 +484,55 @@ static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
     
     if(disconnected)
     {
-        //TODO: Disconnect from server.
+        tl_net_vehicle_connection_disconnect(net_data);
     }
     
     return ret;
 }
 
+static void tl_net_packet_parse(TLNetData *net_data, guint8 command,
+    guint8 answer, const gchar *vin, guint8 encryption, const guint8 *payload,
+    guint payload_len)
+{
+    switch(command)
+    {
+        case TL_NET_COMMAND_TYPE_VEHICLE_LOGIN:
+        {
+            if(answer==TL_NET_ANSWER_TYPE_SUCCEED)
+            {
+                net_data->vehicle_connection_state =
+                    TL_NET_CONNECTION_STATE_LOGINED;
+                net_data->vehicle_connection_retry_count = 0;
+            }
+            else if(answer!=TL_NET_ANSWER_TYPE_COMMAND)
+            {
+                net_data->vehicle_connection_state = 
+                    TL_NET_CONNECTION_STATE_CONNECTED;
+                net_data->vehicle_connection_login_request_timestamp =
+                    g_get_monotonic_time();
+            }
+            break;
+        }
+        case TL_NET_COMMAND_TYPE_REALTIME_DATA:
+        case TL_NET_COMMAND_TYPE_REPEAT_DATA:
+        {
+            if(answer==TL_NET_ANSWER_TYPE_SUCCEED)
+            {
+
+            }
+            else if(answer!=TL_NET_ANSWER_TYPE_COMMAND)
+            {
+                
+            }
+            break;
+        }
+        default:
+        {
+            break;
+        }
+    }
+    
+}
 
 static gboolean tl_net_vehicle_connection_input_pollable_source_cb(
     GObject *pollable_stream, gpointer user_data)
@@ -469,15 +627,14 @@ static gboolean tl_net_vehicle_connection_input_pollable_source_cb(
                     {
                         memcpy(vin_code,
                             net_data->vehicle_packet_read_buffer->data+4, 17);
-                        /*
-                        tl_net_packet_parse(net_data, connection_data,
-                            connection_data->packet_read_buffer->data[2],
-                            connection_data->packet_read_buffer->data[3],
+
+                        tl_net_packet_parse(net_data,
+                            net_data->vehicle_packet_read_buffer->data[2],
+                            net_data->vehicle_packet_read_buffer->data[3],
                             vin_code,
-                            connection_data->packet_read_buffer->data[21],
-                            connection_data->packet_read_buffer->data+24,
-                            connection_data->packet_read_expect_length-24);
-                        */
+                            net_data->vehicle_packet_read_buffer->data[21],
+                            net_data->vehicle_packet_read_buffer->data+24,
+                            net_data->vehicle_packet_read_expect_length-24);
                     }
                     else
                     {
@@ -509,7 +666,7 @@ static gboolean tl_net_vehicle_connection_input_pollable_source_cb(
             g_clear_error(&error);
         }
         
-        //TODO: Disconnect from server.
+        tl_net_vehicle_connection_disconnect(net_data);
         
         return FALSE;
     }
@@ -518,8 +675,10 @@ static gboolean tl_net_vehicle_connection_input_pollable_source_cb(
 }
 
 static void tl_net_vehicle_connection_packet_output_request(
-    TLNetData *net_data, GByteArray *packet)
+    TLNetData *net_data, GByteArray *packet, gboolean request_answer)
 {
+    TLNetWriteBufferData *write_buffer_data;
+    
     if(net_data->vehicle_output_source==NULL)
     {
         net_data->vehicle_output_source =
@@ -534,7 +693,12 @@ static void tl_net_vehicle_connection_packet_output_request(
             g_source_attach(net_data->vehicle_output_source, NULL);
         }
     }
-    g_queue_push_tail(net_data->vehicle_write_queue, g_byte_array_ref(packet));
+    
+    write_buffer_data = tl_net_write_buffer_data_new(packet);
+    write_buffer_data->request_answer = request_answer;
+    
+    g_queue_push_tail(net_data->vehicle_write_queue,
+        write_buffer_data);
 }
 
 static void tl_net_vehicle_connect_host_async_cb(GObject *source,
@@ -560,8 +724,10 @@ static void tl_net_vehicle_connect_host_async_cb(GObject *source,
     if(connection!=NULL)
     {
         net_data->vehicle_connection = connection;
-        net_data->vehicle_connection_state = 2;
+        net_data->vehicle_connection_state = TL_NET_CONNECTION_STATE_CONNECTED;
         net_data->vehicle_connection_retry_count = 0;
+        net_data->vehicle_connection_login_request_timestamp = 0;
+        net_data->vehicle_write_request_answer = FALSE;
         
         net_data->vehicle_input_stream = g_io_stream_get_input_stream(
             G_IO_STREAM(connection));
@@ -619,20 +785,87 @@ static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
 {
     TLNetData *net_data = (TLNetData *)user_data;
     const gchar *server_host;
+    gint64 now;
+    GByteArray *ba;
     
     if(user_data==NULL)
     {
         return FALSE;
     }
     
+    now = g_get_monotonic_time();
+    
     switch(net_data->vehicle_connection_state)
     {
-        case 2:
+        case TL_NET_CONNECTION_STATE_ANSWER_PENDING:
         {
+            if(now - net_data->vehicle_connection_request_timestamp >=
+                net_data->vehicle_connection_answer_timeout * 1e6)
+            {
+                //TODO: Request TIMEOUT!
+            }
+            break;
+        }
+        case TL_NET_CONNECTION_STATE_LOGINED:
+        {
+            if(now - net_data->vehicle_connection_heartbeat_timestamp >=
+                (gint64)net_data->vehicle_connection_heartbeat_timeout * 1e6)
+            {
+                ba = tl_net_heartbeat_packet_build(net_data);
+                tl_net_vehicle_connection_packet_output_request(net_data,
+                    ba, FALSE);
+                g_byte_array_unref(ba);
+                net_data->vehicle_connection_heartbeat_timestamp = now;
+            }
             
             break;
         }
-        case 0:
+        case TL_NET_CONNECTION_STATE_LOGINING:
+        {
+            if(now -
+                net_data->vehicle_connection_login_request_timestamp >=
+                (gint64)net_data->vehicle_connection_answer_timeout * 1e6)
+            {
+                net_data->vehicle_connection_state =
+                    TL_NET_CONNECTION_STATE_CONNECTED;
+                net_data->vehicle_connection_login_request_timestamp = now;
+            }
+            
+            break;
+        }
+        case TL_NET_CONNECTION_STATE_CONNECTED:
+        {
+            if(net_data->vehicle_connection_retry_count >
+                net_data->vehicle_connection_retry_maximum)
+            {
+                if(net_data->current_vehicle_server!=NULL)
+                {
+                    net_data->current_vehicle_server = g_list_next(
+                        net_data->current_vehicle_server);
+                }
+                tl_net_vehicle_connection_disconnect(net_data);
+            }
+            else
+            {
+                if(now -
+                    net_data->vehicle_connection_login_request_timestamp >=
+                    (gint64)net_data->vehicle_connection_retry_cycle * 1e6)
+                {
+                    ba = tl_net_login_packet_build(net_data);
+                    tl_net_vehicle_connection_packet_output_request(net_data,
+                        ba, TRUE);
+                    g_byte_array_unref(ba);
+                    
+                    net_data->vehicle_connection_state =
+                        TL_NET_CONNECTION_STATE_LOGINING;
+                    net_data->vehicle_connection_retry_count++;
+                    net_data->vehicle_connection_login_request_timestamp = now;
+                }
+            }
+            
+            break;
+        }
+        case TL_NET_CONNECTION_STATE_IDLE:
         {
             if(net_data->vehicle_server_list==NULL)
             {
@@ -647,10 +880,13 @@ static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
     
             server_host = net_data->current_vehicle_server->data;
     
-            net_data->vehicle_connection_state = 1;
+            net_data->vehicle_connection_state =
+                TL_NET_CONNECTION_STATE_CONNECTING;
             g_socket_client_connect_to_host_async(net_data->vehicle_client,
                 server_host, 0, NULL, tl_net_vehicle_connect_host_async_cb,
                 net_data);
+            
+            break;
         }
         default:
         {
@@ -673,6 +909,10 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     
     g_tl_net_data.vehicle_connection_retry_maximum = 3;
     g_tl_net_data.vehicle_connection_retry_cycle = 10;
+    
+    g_tl_net_data.vehicle_connection_answer_timeout = 60;
+    g_tl_net_data.vehicle_connection_heartbeat_timeout = 10;
+    
     g_tl_net_data.vehicle_connection_state = 0;
     
     g_tl_net_data.vehicle_packet_read_buffer = g_byte_array_new();
@@ -708,7 +948,7 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     
     g_tl_net_data.current_vehicle_server = g_tl_net_data.vehicle_server_list;
     
-    g_tl_net_data.vehicle_connection_check_timeout = g_timeout_add_seconds(5,
+    g_tl_net_data.vehicle_connection_check_timeout = g_timeout_add_seconds(2,
         tl_net_vehicle_connection_check_timeout_cb, &g_tl_net_data);
     
     g_tl_net_data.initialized = TRUE;
@@ -779,7 +1019,7 @@ void tl_net_uninit()
     if(g_tl_net_data.vehicle_write_queue!=NULL)
     {
         g_queue_free_full(g_tl_net_data.vehicle_write_queue,
-            (GDestroyNotify)g_byte_array_unref);
+            (GDestroyNotify)tl_net_write_buffer_data_free);
         g_tl_net_data.vehicle_write_queue = NULL;
     }
     
