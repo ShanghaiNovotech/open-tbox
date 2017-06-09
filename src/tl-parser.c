@@ -202,6 +202,7 @@ static void tl_parser_markup_parser_text(GMarkupParseContext *context,
     const gchar *text, gsize text_len, gpointer user_data, GError **error)
 {
     TLParserData *parser_data = (TLParserData *)user_data;
+    guint value;
     
     if(user_data==NULL)
     {
@@ -226,7 +227,8 @@ static void tl_parser_markup_parser_text(GMarkupParseContext *context,
         }
         case TL_PARSER_PRIMARY_STATE_BATTERY_CODE_LEN:
         {
-            sscanf(text, "%u", &(parser_data->single_bat_code_len));
+            sscanf(text, "%u", &value);
+            parser_data->single_bat_code_len = value;
             break;
         }
         case TL_PARSER_PRIMARY_STATE_BATTERY_CODE:
