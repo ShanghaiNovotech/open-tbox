@@ -31,6 +31,8 @@ typedef struct _TLNetData
     gchar *iccid;
     guint16 session;
     
+    gboolean first_connected;
+    
     gint64 realtime_now;
     gint64 time_now;
     
@@ -57,6 +59,8 @@ typedef struct _TLNetData
     
     GTree *vehicle_data_tree;
     GMutex vehicle_data_mutex;
+    
+    guint vehicle_data_report_timer_timeout;
 }TLNetData;
 
 typedef struct _TLNetWriteBufferData
@@ -119,9 +123,26 @@ typedef enum
     TL_NET_PACKET_ENCRYPTION_TYPE_INVALID = 0xFF,
 }TLNetPacketEncryptionType;
 
+typedef enum
+{
+    TL_NET_VEHICLE_DATA_TYPE_TOTAL_DATA = 0x1,
+    TL_NET_VEHICLE_DATA_TYPE_DRIVE_MOTOR = 0x2,
+    TL_NET_VEHICLE_DATA_TYPE_FUEL_BATTERY = 0x3,
+    TL_NET_VEHICLE_DATA_TYPE_ENGINE = 0x4,
+    TL_NET_VEHICLE_DATA_TYPE_VEHICLE_POSITION = 0x5,
+    TL_NET_VEHICLE_DATA_TYPE_EXTREMUM = 0x6,
+    TL_NET_VEHICLE_DATA_TYPE_ALARM = 0x7,
+    TL_NET_VEHICLE_DATA_TYPE_RECHARGABLE_DEVICE_VOLTAGE = 0x8,
+    TL_NET_VEHICLE_DATA_TYPE_RECHARGABLE_DEVICE_TEMPERATURE = 0x9,
+    TL_NET_VEHICLE_DATA_TYPE_LAST
+}TLNetVehicleDataType;
+
 static TLNetData g_tl_net_data = {0};
 
 #define TL_NET_CONF_PATH_DEFAULT "/var/lib/tbox/conf"
+
+static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
+    GHashTable *log_table);
 
 static TLNetWriteBufferData *tl_net_write_buffer_data_new(GByteArray *ba)
 {
@@ -628,6 +649,7 @@ static void tl_net_packet_parse(TLNetData *net_data, guint8 command,
                 net_data->vehicle_connection_state =
                     TL_NET_CONNECTION_STATE_LOGINED;
                 net_data->vehicle_connection_retry_count = 0;
+                net_data->first_connected = TRUE;
             }
             else if(answer!=TL_NET_ANSWER_TYPE_COMMAND)
             {
@@ -1170,6 +1192,68 @@ static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
     return TRUE;
 }
 
+static gboolean tl_net_vehicle_data_report_timeout(gpointer user_data)
+{
+    TLNetData *net_data = (TLNetData *)user_data;
+    gboolean updated = FALSE;
+    GHashTable *current_data_table;
+    TLLoggerLogItemData *log_item_data;
+    gint64 now, report_timeout;
+    GByteArray *packet;
+    GDateTime *dt;
+    gint64 timestamp;
+    
+    if(user_data==NULL)
+    {
+        return FALSE;
+    }
+    
+    if(!net_data->first_connected)
+    {
+        return TRUE;
+    }
+    
+    current_data_table = tl_logger_current_data_get(&updated);
+    if(current_data_table==NULL || !updated)
+    {
+        return TRUE;
+    }
+    
+    log_item_data = g_hash_table_lookup(current_data_table,
+        TL_PARSER_VEHICLE_FAULT_LEVEL);
+    if(log_item_data!=NULL)
+    {
+        net_data->vehicle_data_report_is_emergency =
+            (log_item_data->value >= 3);
+    }
+    
+    now = g_get_monotonic_time();
+    
+    report_timeout = net_data->vehicle_data_report_is_emergency ?
+        net_data->vehicle_data_report_emergency_timeout :
+        net_data->vehicle_data_report_normal_timeout;
+    report_timeout *= 1e6;
+    
+    if(now - net_data->vehicle_data_report_timestamp >=
+        report_timeout)
+    {
+        dt = g_date_time_new_now_local();
+        timestamp = g_date_time_to_unix(dt);
+        g_date_time_unref(dt);
+        
+        packet = g_byte_array_new();
+        
+        tl_net_vehicle_packet_build_total_data(packet, current_data_table);
+        
+        g_mutex_lock(&(net_data->vehicle_data_mutex));
+        g_tree_replace(net_data->vehicle_data_tree, g_memdup(&timestamp,
+            sizeof(gint64)), packet);
+        g_mutex_unlock(&(net_data->vehicle_data_mutex));
+    }
+    
+    return TRUE;
+}
+
 static gint tl_net_int64ptr_compare(gconstpointer a, gconstpointer b,
     gpointer user_data)
 {
@@ -1279,6 +1363,9 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     g_tl_net_data.vehicle_connection_check_timeout = g_timeout_add_seconds(2,
         tl_net_vehicle_connection_check_timeout_cb, &g_tl_net_data);
     
+    g_tl_net_data.vehicle_data_report_timer_timeout = g_timeout_add_seconds(1,
+        tl_net_vehicle_data_report_timeout, &g_tl_net_data);
+    
     g_tl_net_data.initialized = TRUE;
     
     return TRUE;
@@ -1289,6 +1376,12 @@ void tl_net_uninit()
     if(!g_tl_net_data.initialized)
     {
         return;
+    }
+    
+    if(g_tl_net_data.vehicle_data_report_timer_timeout>0)
+    {
+        g_source_remove(g_tl_net_data.vehicle_data_report_timer_timeout);
+        g_tl_net_data.vehicle_data_report_timer_timeout = 0;
     }
     
     if(g_tl_net_data.vehicle_connection_check_timeout>0)
@@ -1370,4 +1463,289 @@ void tl_net_uninit()
     }
     
     g_tl_net_data.initialized = FALSE;
+}
+
+static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
+    GHashTable *log_table)
+{
+    guint8 u8_value;
+    guint16 u16_value;
+    guint32 u32_value;
+    const TLLoggerLogItemData *item_data;
+    
+    u8_value = TL_NET_VEHICLE_DATA_TYPE_TOTAL_DATA;
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_VEHICLE_STATE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value==0)
+        {
+            u8_value = 2;
+        }
+        else if(item_data->value==1)
+        {
+            u8_value = 1;
+        }
+        else
+        {
+            u8_value = 3;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_BATTERY_STATE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value==6)
+        {
+            u8_value = 1;
+        }
+        else if(item_data->value==7)
+        {
+            u8_value = 2;
+        }
+        else if(item_data->value==8)
+        {
+            u8_value = 4;
+        }
+        else if(item_data->value==0xA)
+        {
+            u8_value = 0xFE;
+        }
+        else if(item_data->value>=0 && item_data->value<=5)
+        {
+            u8_value = 3;
+        }
+        else
+        {
+            u8_value = 0xFF;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_RUNNING_MODE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value==1)
+        {
+            u8_value = 1;
+        }
+        else if(item_data->value==3)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = 0xFF;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_VEHICLE_SPEED);
+    if(item_data!=NULL)
+    {
+        u16_value = (gdouble)item_data->value * 10 * item_data->unit;
+        if(u16_value <= 2200)
+        {
+            u16_value = g_htons(u16_value);
+        }
+        else
+        {
+            u16_value = g_htons(0xFFFE);
+        }
+    }
+    else
+    {
+        u16_value = 0xFFFF;
+    }
+    g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_TOTAL_MILEAGE);
+    if(item_data!=NULL)
+    {
+        u32_value = (gdouble)item_data->value * 10 * item_data->unit;
+        if(u32_value <= 9999999)
+        {
+            u32_value = g_htonl(u32_value);
+        }
+        else
+        {
+            u32_value = g_htonl(0xFFFFFFFE);
+        }
+    }
+    else
+    {
+        u32_value = 0xFFFFFFFF;
+    }
+    g_byte_array_append(packet, (const guint8 *)&u32_value, 4);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_TOTAL_VOLTAGE);
+    if(item_data!=NULL)
+    {
+        u16_value = (gdouble)item_data->value * 10 * item_data->unit;
+        if(u16_value <= 10000)
+        {
+            u16_value = g_htons(u16_value);
+        }
+        else
+        {
+            u16_value = g_htons(0xFFFE);
+        }
+    }
+    else
+    {
+        u16_value = 0xFFFF;
+    }
+    g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_TOTAL_CURRENT);
+    if(item_data!=NULL)
+    {
+        u16_value = ((gdouble)item_data->value + 1000 * item_data->unit) + 1000;
+        u16_value *= 10;
+        if(u16_value <= 20000)
+        {
+            u16_value = g_htons(u16_value);
+        }
+        else
+        {
+            u16_value = g_htons(0xFFFE);
+        }
+    }
+    else
+    {
+        u16_value = 0xFFFF;
+    }
+    g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_SOC_STATE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>100)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_DC2DC_STATE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value==1)
+        {
+            u8_value = 1;
+        }
+        else if(item_data->value==0)
+        {
+            u8_value = 2;
+        }
+        else
+        {
+            u8_value = 0xFE;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_GEAR_SHIFT_STATE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value==0)
+        {
+            u8_value = 0;
+        }
+        else if(item_data->value==1)
+        {
+            u8_value = 0xE;
+        }
+        else if(item_data->value==2)
+        {
+            u8_value = 0xD;
+        }
+        else if(item_data->value==3)
+        {
+            u8_value = 0xF;
+        }
+        else
+        {
+            u8_value = 0;
+        }
+    }
+    else
+    {
+        u8_value = 0;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_INSULATION_RESISTANCE);
+    if(item_data!=NULL)
+    {
+        u16_value = (gdouble)item_data->value * 10 * item_data->unit;
+        u16_value = g_htons(u16_value);
+    }
+    else
+    {
+        u16_value = 0xFFFF;
+    }
+    g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_ACCELERATOR_LEVEL);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>100)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_BRAKE_LEVEL);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>101)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
 }
