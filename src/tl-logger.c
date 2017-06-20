@@ -1062,7 +1062,7 @@ static gboolean tl_logger_log_update_timer_cb(gpointer user_data)
         }
         
         g_mutex_lock(&(logger_data->cached_log_mutex));
-        g_queue_push_tail(logger_data->write_log_queue, dup_data);
+        g_queue_push_tail(logger_data->write_log_queue, dup_table);
         g_mutex_unlock(&(logger_data->cached_log_mutex));
                 
         logger_data->last_timestamp = logger_data->new_timestamp;

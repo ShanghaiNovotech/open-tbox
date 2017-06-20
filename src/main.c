@@ -40,7 +40,7 @@ int main(int argc, char *argv[])
 {
     GError *error = NULL;
     GOptionContext *context;
-    gchar *conf_file_path;
+    const gchar *conf_file_path;
     gchar *parse_file_path;
     
     context = g_option_context_new("- TBox Logger");
@@ -71,6 +71,16 @@ int main(int argc, char *argv[])
         daemon(0, 0);
     }
     
+    
+    if(g_tl_main_cmd_conf_path!=NULL)
+    {
+        conf_file_path = g_tl_main_cmd_conf_path;
+    }
+    else
+    {
+        conf_file_path = "/var/lib/tbox/conf";
+    }
+    
     if(!tl_logger_init(g_tl_main_cmd_log_storage_path))
     {
         g_error("Cannot initialize logger!");
@@ -96,8 +106,7 @@ int main(int argc, char *argv[])
         g_warning("Cannot initialize net module! Data may not be uploaded.");
     }
     
-    parse_file_path = g_build_filename(g_tl_main_cmd_conf_path,
-        "tboxparse.xml", NULL);
+    parse_file_path = g_build_filename(conf_file_path, "tboxparse.xml", NULL);
     tl_parser_load_parse_file(parse_file_path);
     g_free(parse_file_path);
     

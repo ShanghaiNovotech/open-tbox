@@ -292,7 +292,7 @@ static GByteArray *tl_net_login_packet_build(TLNetData *net_data)
     guint8 year, month, day;
     guint8 hour, min, sec;
     guint16 s_value;
-    guint8 iccid_buf[20];
+    guint8 iccid_buf[20] = {0};
     guint iccid_len;
     GHashTable *log_table;
     TLLoggerLogItemData *log_item;
@@ -1018,6 +1018,9 @@ static gboolean tl_net_vehicle_data_traverse(gpointer key, gpointer value,
     {
         return FALSE;
     }
+    
+    g_debug("Vehicle data packet timestamp %llu\n", *timestamp);
+    
     tl_net_vehicle_connection_packet_output_request(net_data,
         packet, TRUE, is_repeat ? TL_NET_COMMAND_TYPE_REPEAT_DATA :
         TL_NET_COMMAND_TYPE_REALTIME_DATA);
@@ -1249,6 +1252,8 @@ static gboolean tl_net_vehicle_data_report_timeout(gpointer user_data)
         g_tree_replace(net_data->vehicle_data_tree, g_memdup(&timestamp,
             sizeof(gint64)), packet);
         g_mutex_unlock(&(net_data->vehicle_data_mutex));
+        
+        net_data->vehicle_data_report_timestamp = now;
     }
     
     return TRUE;
@@ -1614,7 +1619,7 @@ static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     item_data = g_hash_table_lookup(log_table, TL_PARSER_TOTAL_CURRENT);
     if(item_data!=NULL)
     {
-        u16_value = ((gdouble)item_data->value + 1000 * item_data->unit) + 1000;
+        u16_value = ((gdouble)item_data->value * item_data->unit) + 1000;
         u16_value *= 10;
         if(u16_value <= 20000)
         {

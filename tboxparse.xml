@@ -3,12 +3,35 @@
   <rev>201704070000</rev>
   <idext>0</idext>
   <signal id='0x430' name='BMS08_BatNumber' byteorder='BE' firstbyte='1' firstbit='6' bitlength='2' unit='1' offset='0' source='0' />
-  <signal id='0x102' name='VCU01_PTReady' byteorder='BE' firstbyte='7' firstbit='60' bitlenght='1' unit='1' offset='0'  source='0' />
+  <signal id='0x102' name='VCU01_PTReady' byteorder='BE' firstbyte='7' firstbit='60' bitlength='1' unit='1' offset='0'  source='0' />
   <signal id='0x6E' name='BMS01_BatState' byteorder='BE' firstbyte='5' firstbit='40' bitlength='4' unit='1' offset='0'  source='0' />
   <signal id='0x102' name='BMS01_PTMode' byteorder='BE' firstbyte='7' firstbit='61' bitlength='3' unit='1' offset='0'  source='0' />
   <signal id='0x268' name='VCU08_VehicleSpeed' byteorder='BE' firstbyte='5' firstbit='46' bitlength='10' unit='0.25' offset='0'  source='0' />
-  <signal id='0x82' name='DPU01_ODO' byteorder='BE' firstbyte='3' firstbit='24' bitlengh='20' unit='1' offset='0'  source='0' />
+  <signal id='0x82' name='DPU01_ODO' byteorder='BE' firstbyte='3' firstbit='24' bitlength='20' unit='1' offset='0'  source='0' />
   <signal id='0x6E' name='BMS01_actVoltage' byteorder='BE' firstbyte='2' firstbit='16' bitlength='12' unit='0.25' offset='0'  source='0' />
   <signal id='0x6E' name='BMS01_actCurrent' byteorder='BE' firstbyte='1' firstbit='12' bitlength='12' unit='0.25' offset='-512'  source='0' />
-  <signal id='0x6E' name='BMS01_actSOC' byteorder='BE' firstbyte='3' firstbit='24' bitlength='8' unit='0.5' offset='0'  source='0' />
+  <signal id='0x6E' name='BMS01_actSOC' byteorder='BE' firstbyte='3' firstbit='24' bitlength='8' unit='0.5' offset='0' source='0' />
+  <signal id='0x410' name='VCU09_StOpMode' byteorder='BE' firstbyte='5' firstbit='42' bitlength='3' unit='1' offset='0' source='0' /> 
+  <signal id='0x102' name='VCU01_StGear' byteorder='BE' firstbyte='0' firstbit='0' bitlength='2' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_IsoResistance' byteorder='BE' firstbyte='1' firstbit='14' bitlength='10' unit='10' offset='0' source='0' />
+  <signal id='0x330' name='VCU03_GasNrm' byteorder='BE' firstbyte='3' firstbit='24' bitlength='8' unit='1' offset='0' source='0' />
+  <signal id='0x102' name='VCU01_bBrk' byteorder='BE' firstbyte='5' firstbit='45' bitlength='1' unit='1' offset='0' source='0' />
+
+  <signal id='0x268' name='VCU08_EMNumber' byteorder='BE' firstbyte='5' firstbit='44' bitlength='2' unit='1' offset='0' source='0' />
+  <signal id='0x268' name='VCU08_EMIndex' byteorder='BE' firstbyte='5' firstbit='42' bitlength='2' unit='1' offset='0' source='0' />
+  <signal id='0x102' name='VCU01_EMMode' byteorder='BE' firstbyte='6' firstbit='53' bitlength='3' unit='1' offset='0' source='0' />
+  <signal id='0x330' name='VCU03_MCUTemp' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='-40' source='0' />
+  <signal id='0x102' name='VCU01_EMSpeed' byteorder='BE' firstbyte='3' firstbit='24' bitlength='16' unit='1' offset='0' source='0' />
+  <signal id='0xF8' name='VCU02_EMTrq' byteorder='BE' firstbyte='1' firstbit='14' bitlength='10' unit='1' offset='-512' source='0' />
+  <signal id='0x330' name='VCU03_EMTemp' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='-40' source='0' />
+  <signal id='0x62' name='VCU05_CapVoltage' byteorder='BE' firstbyte='6' firstbit='52' bitlength='10' unit='0.5' offset='0' source='0' />
+  <signal id='0x62' name='VCU05_PTCurrent' byteorder='BE' firstbyte='3' firstbit='28' bitlength='12' unit='0.25' offset='-512' source='0' />
+
 </tbox>
+
+<template>
+  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' source='0' />
+  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' source='0' />
+  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' source='0' />
+  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' source='0' />
+</template>

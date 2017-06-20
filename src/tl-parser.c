@@ -83,7 +83,7 @@ static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
         {
             if(g_strcmp0(attribute_names[i], "id")==0)
             {
-                if(sscanf(attribute_values[i], "%d", &(signal_data->id))>=1)
+                if(sscanf(attribute_values[i], "0x%X", &(signal_data->id))>=1)
                 {
                     have_id = TRUE;
                     if(signal_data->id >= 2048)
@@ -95,11 +95,11 @@ static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
             }
             else if(g_strcmp0(attribute_names[i], "name")==0)
             {
-                signal_data->name = g_strdup(attribute_names[i]);
+                signal_data->name = g_strdup(attribute_value[i]);
             }
             else if(g_strcmp0(attribute_names[i], "byteorder")==0)
             {
-                if(g_ascii_strcasecmp(attribute_names[i], "BE")==0)
+                if(g_ascii_strcasecmp(attribute_value[i], "BE")==0)
                 {
                     signal_data->endian = TRUE;
                 }
@@ -137,14 +137,15 @@ static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
             {
                 signal_list = g_hash_table_lookup(parser_data->parser_table,
                     GINT_TO_POINTER(signal_data->id));
-                signal_list = g_slist_prepend(signal_list, signal_data);
+                signal_list = g_slist_append(signal_list, signal_data);
             }
             else
             {
                 signal_list = g_slist_append(NULL, signal_data);
+                g_hash_table_replace(parser_data->parser_table,
+                    GINT_TO_POINTER(signal_data->id), signal_list);
             }
-            g_hash_table_replace(parser_data->parser_table,
-                GINT_TO_POINTER(signal_data->id), signal_list);
+            
         }
         else
         {
@@ -332,7 +333,7 @@ gboolean tl_parser_load_parse_file(const gchar *file)
         &g_tl_parser_markup_parser, 0, &g_tl_parser_data, NULL);
     while(!feof(fp))
     {
-        if((rsize=fread(buffer, 4096, 1, fp))>0)
+        if((rsize=fread(buffer, 1, 4096, fp))>0)
         {
             g_markup_parse_context_parse(g_tl_parser_data.parser_context,
                 buffer, rsize, &error);
@@ -406,17 +407,16 @@ gboolean tl_parser_parse_can_data(const gchar *device,
             continue;
         }
         
-        value = 0;
+        rvalue = 0;
         
         if(signal_data->endian) /* BE */
         {
             rbits = 8 - (signal_data->firstbit%8) + firstbyte * 8;
             for(i=0;i<signal_data->bitlength && i<rbits;i++)
             {
-                x = (rbits - i) / 8;
+                x = (rbits - i - 1) / 8;
                 y = (signal_data->firstbit + i) % 8;
-                rvalue = rvalue << 1;
-                rvalue |= ((data[x] >> y) & 1);
+                rvalue |= (((data[x] >> y) & 1) << i);
             }
         }
         else
@@ -426,8 +426,7 @@ gboolean tl_parser_parse_can_data(const gchar *device,
             {
                 x = (signal_data->firstbit + i) / 8;
                 y = (signal_data->firstbit + i) % 8;
-                rvalue = rvalue << 1;
-                rvalue |= ((data[x] >> y) & 1);
+                rvalue |= (((data[x] >> y) & 1) << i);
             }
         }
         
