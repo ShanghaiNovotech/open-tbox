@@ -42,6 +42,10 @@ static void tl_parser_signal_data_free(TLParserSignalData *data)
     {
         g_free(data->name);
     }
+    if(data->listparent!=NULL)
+    {
+        g_free(data->listparent);
+    }
     g_free(data);
 }
 
@@ -95,11 +99,11 @@ static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
             }
             else if(g_strcmp0(attribute_names[i], "name")==0)
             {
-                signal_data->name = g_strdup(attribute_value[i]);
+                signal_data->name = g_strdup(attribute_values[i]);
             }
             else if(g_strcmp0(attribute_names[i], "byteorder")==0)
             {
-                if(g_ascii_strcasecmp(attribute_value[i], "BE")==0)
+                if(g_ascii_strcasecmp(attribute_values[i], "BE")==0)
                 {
                     signal_data->endian = TRUE;
                 }
@@ -123,6 +127,14 @@ static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
             else if(g_strcmp0(attribute_names[i], "offset")==0)
             {
                 sscanf(attribute_values[i], "%d", &(signal_data->offset));
+            }
+            else if(g_strcmp0(attribute_names[i], "listparent")==0)
+            {
+                signal_data->listparent = g_strdup(attribute_values[i]);
+            }
+            else if(g_strcmp0(attribute_names[i], "listindex")==0)
+            {
+                sscanf(attribute_values[i], "%u", &(signal_data->listindex));
             }
             else if(g_strcmp0(attribute_names[i], "source")==0)
             {
@@ -438,6 +450,8 @@ gboolean tl_parser_parse_can_data(const gchar *device,
         item_data.value = value;
         item_data.unit = signal_data->unit;
         item_data.source = signal_data->source;
+        item_data.list_parent = signal_data->listparent;
+        item_data.list_index = (signal_data->listindex!=0);
         
         tl_logger_current_data_update(&item_data);
     }

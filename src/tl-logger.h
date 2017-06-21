@@ -8,7 +8,11 @@ typedef struct _TLLoggerLogItemData
     gchar *name;
     gint64 value;
     gdouble unit;
+    guint list_item;
     gint8 source;
+    gboolean list_index;
+    gchar *list_parent;
+    GHashTable *list_table;
 }TLLoggerLogItemData;
 
 typedef void (*TLLoggerQueryResultCallback)(gboolean begin_time_set,

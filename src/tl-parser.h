@@ -13,6 +13,8 @@ typedef struct _TLParserSignalData
     guint bitlength;
     gdouble unit;
     int offset;
+    guint listindex;
+    gchar *listparent;
     int source;
 }TLParserSignalData;
 

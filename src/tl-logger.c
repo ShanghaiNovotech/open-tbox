@@ -76,6 +76,9 @@ static TLLoggerLogItemData *tl_logger_log_item_data_dup(
     TLLoggerLogItemData *data)
 {
     TLLoggerLogItemData *new_data;
+    GHashTableIter iter;
+    gpointer key;
+    gint64 *value;
     
     if(data==NULL)
     {
@@ -87,6 +90,20 @@ static TLLoggerLogItemData *tl_logger_log_item_data_dup(
     new_data->value = data->value;
     new_data->unit = data->unit;
     new_data->source = data->source;
+    new_data->list_parent = g_strdup(data->list_parent);
+    
+    if(data->list_table!=NULL && data->list_item>0)
+    {
+        new_data->list_table = g_hash_table_new_full(g_direct_hash,
+            g_direct_equal, NULL, g_free);
+        
+        g_hash_table_iter_init(&iter, data->list_table);
+        while(g_hash_table_iter_next(&iter, &key, (gpointer *)&value))
+        {
+            g_hash_table_replace(new_data->list_table, key, g_memdup(value,
+                sizeof(gint64)));
+        }
+    }
     
     return new_data;
 }
@@ -100,6 +117,14 @@ static void tl_logger_log_item_data_free(TLLoggerLogItemData *data)
     if(data->name!=NULL)
     {
         g_free(data->name);
+    }
+    if(data->list_parent!=NULL)
+    {
+        g_free(data->list_parent);
+    }
+    if(data->list_table!=NULL)
+    {
+        g_hash_table_unref(data->list_table);
     }
     g_free(data);
 }
@@ -359,12 +384,15 @@ static gboolean tl_logger_log_query_from_cache(TLLoggerData *logger_data,
 static GByteArray *tl_logger_log_to_file_data(GHashTable *log_data)
 {
     GByteArray *ba;
-    GHashTableIter iter;
+    GHashTableIter iter, iter2;
     TLLoggerLogItemData *item_data;
-    json_object *root, *child, *item_object;
+    json_object *root, *child, *item_object, *array, *dict;
     const gchar *json_data;
     guint32 json_len, belen;
     guint16 crc, becrc;
+    gpointer key;
+    gint64 *valueptr;
+    gchar keystr[16] = {0};
     
     ba = g_byte_array_new();
     
@@ -390,6 +418,39 @@ static GByteArray *tl_logger_log_to_file_data(GHashTable *log_data)
         
         child = json_object_new_int(item_data->source);
         json_object_object_add(item_object, "source", child);
+        
+        if(item_data->list_item && item_data->list_table!=NULL)
+        {
+            child = json_object_new_int(1);
+            json_object_object_add(item_object, "listindex", child);
+            
+            array = json_object_new_array();
+            g_hash_table_iter_init(&iter2, item_data->list_table);
+            while(g_hash_table_iter_next(&iter2, &key, NULL))
+            {
+                child = json_object_new_int(GPOINTER_TO_INT(key));
+                json_object_array_add(array, child);
+            }
+            json_object_object_add(item_object, "index", array);
+        }
+        else if(item_data->list_parent!=NULL && item_data->list_table!=NULL)
+        {
+            child = json_object_new_string(item_data->list_parent);
+            json_object_object_add(item_object, "listparent", child);
+            dict = json_object_new_object();
+            g_hash_table_iter_init(&iter2, item_data->list_table);
+            while(g_hash_table_iter_next(&iter2, &key, (gpointer *)&valueptr))
+            {
+                if(valueptr==NULL)
+                {
+                    continue;
+                }
+                snprintf(keystr, 15, "%d", GPOINTER_TO_INT(key));
+                child = json_object_new_int64(*valueptr);
+                json_object_object_add(dict, keystr, child);
+            }
+            json_object_object_add(item_object, "valuetable", dict);
+        }
         
         json_object_array_add(root, item_object);
     }
@@ -553,7 +614,7 @@ static gboolean tl_logger_log_archive_compress_file(TLLoggerData *logger_data,
         return FALSE;
     }
     
-    while((rsize=fread(buff, 4096, 1, fp))>0)
+    while((rsize=fread(buff, 1, 4096, fp))>0)
     {
         write_size += g_output_stream_write(compress_ostream, buff,
             rsize, NULL, &error);
@@ -593,17 +654,21 @@ static gboolean tl_logger_log_query_file_cb(TLLoggerData *logger_data,
     GByteArray *ba, TLLoggerQueryData *query_data)
 {
     struct json_tokener *tokener;
-    struct json_object *root = NULL, *node, *child;
-    guint array_len, i;
+    struct json_object *root = NULL, *node, *child, *array, *dict;
+    guint array_len, array2_len, i, j;
     gboolean ret = TRUE;
     gboolean data_completed = TRUE;
-    const gchar *name;
+    const gchar *name, *listparent;
     
-    GHashTable *log_table;
+    GHashTable *log_table, *value_table;
     TLLoggerLogItemData *log_item_data;
     gint64 log_value;
     gint log_source;
     gdouble log_unit;
+    gboolean list_index;
+    gint64 i64value;
+    gint ivalue;
+    struct json_object_iter json_iter;
     
     const gchar *json_data = (const gchar *)ba->data + 10;
     guint json_len = ba->len - 14;
@@ -668,6 +733,72 @@ static gboolean tl_logger_log_query_file_cb(TLLoggerData *logger_data,
             log_source = 0;
         }
         
+        list_index = FALSE;
+        value_table = NULL;
+        json_object_object_get_ex(node, "listindex", &child);
+        if(child!=NULL)
+        {
+            list_index = (json_object_get_int(child)!=0);
+            array = NULL;
+            if(list_index)
+            {
+                json_object_object_get_ex(node, "index", &array);
+                if(array==NULL)
+                {
+                    list_index = FALSE;
+                }
+            }
+            if(list_index)
+            {
+                array2_len = json_object_array_length(array);
+                value_table = g_hash_table_new_full(g_direct_hash,
+                    g_direct_equal, NULL, g_free);
+                for(j=0;j<array2_len;j++)
+                {
+                    child = json_object_array_get_idx(array, j);
+                    if(child==NULL)
+                    {
+                        continue;
+                    }
+                    i64value = json_object_get_int64(child);
+                    ivalue = i64value;
+                    g_hash_table_replace(value_table, GINT_TO_POINTER(ivalue),
+                        g_memdup(&i64value, sizeof(gint64)));
+                }   
+            }
+        }
+        
+        listparent = NULL;
+        dict = NULL;
+        if(!list_index)
+        {
+            json_object_object_get_ex(node, "listparent", &child);
+            if(child!=NULL)
+            {
+                listparent = json_object_get_string(child);
+            }
+        }
+        if(listparent!=NULL)
+        {
+            json_object_object_get_ex(node, "valuetable", &dict);
+            if(dict!=NULL)
+            {
+                value_table = g_hash_table_new_full(g_direct_hash,
+                    g_direct_equal, NULL, g_free);
+                json_object_object_foreachC(dict, json_iter)
+                {
+                    if(json_iter.key!=NULL && json_iter.val!=NULL &&
+                        sscanf(json_iter.key, "%u", &ivalue)>0)
+                    {
+                        i64value = json_object_get_int64(json_iter.val);
+                        g_hash_table_replace(value_table,
+                            GINT_TO_POINTER(ivalue),
+                            g_memdup(&i64value, sizeof(gint64)));
+                    }
+                }
+            }
+        }
+        
         if(g_strcmp0(name, "time")==0)
         {
             log_value = json_object_get_int64(child);
@@ -692,6 +823,21 @@ static gboolean tl_logger_log_query_file_cb(TLLoggerData *logger_data,
         log_item_data->value = log_value;
         log_item_data->source = log_source;
         log_item_data->unit = log_unit;
+        
+        if(list_index && value_table!=NULL)
+        {
+            log_item_data->list_index = TRUE;
+            log_item_data->list_table = value_table;
+        }
+        else if(listparent!=NULL && value_table!=NULL)
+        {
+            log_item_data->list_parent = g_strdup(listparent);
+            log_item_data->list_table = value_table;
+        }
+        else if(value_table!=NULL)
+        {
+            g_hash_table_unref(value_table);
+        }
         
         g_hash_table_replace(log_table, log_item_data->name, log_item_data);
     }
@@ -843,8 +989,11 @@ static gpointer tl_logger_log_archive_thread(gpointer user_data)
                 {
                     fullpath = g_build_filename(
                         logger_data->storage_base_path, filename, NULL);
-                    tl_logger_log_archive_compress_file(logger_data,
-                        fullpath);
+                    if(tl_logger_log_archive_compress_file(logger_data,
+                        fullpath))
+                    {
+                        g_remove(fullpath);
+                    }
                     g_free(fullpath);
                 }
             }
@@ -977,7 +1126,7 @@ static gpointer tl_logger_log_write_thread(gpointer user_data)
                 logger_data->storage_base_path, filename, NULL);
             g_free(filename);
             
-            fd = open(lastlog_filename, O_WRONLY | O_CREAT);
+            fd = open(lastlog_filename, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
             written_size = 0;
         }
         
@@ -1222,7 +1371,8 @@ void tl_logger_uninit()
 
 void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
 {
-    TLLoggerLogItemData *idata;
+    TLLoggerLogItemData *idata, *pdata;
+    gint pindex = 0;
     
     if(item_data==NULL || item_data->name==NULL)
     {
@@ -1233,6 +1383,23 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
         g_tl_logger_data.last_log_data = g_hash_table_new_full(g_str_hash,
             g_str_equal, NULL, (GDestroyNotify)tl_logger_log_item_data_free);
     }
+    
+    if(!item_data->list_index && item_data->list_parent!=NULL)
+    {
+        pdata = g_hash_table_lookup(g_tl_logger_data.last_log_data,
+            item_data->list_parent);
+        if(pdata==NULL)
+        {
+            return;
+        }
+        pindex = pdata->value;
+        
+        if(pindex<=0)
+        {
+            return;
+        }
+    }
+    
     if(g_hash_table_contains(g_tl_logger_data.last_log_data, item_data->name))
     {
         idata = g_hash_table_lookup(g_tl_logger_data.last_log_data,
@@ -1242,6 +1409,20 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
             idata->value = item_data->value;
             idata->unit = item_data->unit;
             idata->source = item_data->source;
+            
+            if(item_data->list_index)
+            {
+                pindex = item_data->value;
+                g_hash_table_replace(idata->list_table,
+                    GINT_TO_POINTER(pindex), g_memdup(&(item_data->value),
+                    sizeof(gint64)));
+            }
+            else if(item_data->list_parent!=NULL)
+            {
+                g_hash_table_replace(idata->list_table,
+                    GINT_TO_POINTER(pindex), g_memdup(&(item_data->value),
+                    sizeof(gint64)));
+            }
         }
     }
     else
@@ -1251,6 +1432,28 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
         idata->value = item_data->value;
         idata->unit = item_data->unit;
         idata->source = item_data->source;
+        idata->list_index = item_data->list_index;
+        
+        if(item_data->list_index)
+        {
+            idata->list_table = g_hash_table_new_full(g_direct_hash,
+                g_direct_equal, NULL, g_free);
+            
+            pindex = item_data->value;
+            g_hash_table_replace(idata->list_table,
+                GINT_TO_POINTER(pindex), g_memdup(&(item_data->value),
+                sizeof(gint64)));
+        }
+        else if(item_data->list_parent!=NULL)
+        {
+            idata->list_table = g_hash_table_new_full(g_direct_hash,
+                g_direct_equal, NULL, g_free);
+            
+            g_hash_table_replace(idata->list_table,
+                GINT_TO_POINTER(pindex), g_memdup(&(item_data->value),
+                sizeof(gint64)));
+        }
+        
         g_hash_table_replace(g_tl_logger_data.last_log_data, idata->name,
             idata);
     }

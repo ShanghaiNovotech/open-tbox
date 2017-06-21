@@ -1019,7 +1019,7 @@ static gboolean tl_net_vehicle_data_traverse(gpointer key, gpointer value,
         return FALSE;
     }
     
-    g_debug("Vehicle data packet timestamp %llu\n", *timestamp);
+    g_debug("Vehicle data packet timestamp %"G_GINT64_FORMAT"\n", *timestamp);
     
     tl_net_vehicle_connection_packet_output_request(net_data,
         packet, TRUE, is_repeat ? TL_NET_COMMAND_TYPE_REPEAT_DATA :
