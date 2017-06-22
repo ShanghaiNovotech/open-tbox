@@ -143,6 +143,8 @@ static TLNetData g_tl_net_data = {0};
 
 static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     GHashTable *log_table);
+static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
+    GHashTable *log_table);
 
 static TLNetWriteBufferData *tl_net_write_buffer_data_new(GByteArray *ba)
 {
@@ -1247,6 +1249,8 @@ static gboolean tl_net_vehicle_data_report_timeout(gpointer user_data)
         packet = g_byte_array_new();
         
         tl_net_vehicle_packet_build_total_data(packet, current_data_table);
+        tl_net_vehicle_packet_build_drive_motor_data(packet,
+            current_data_table);
         
         g_mutex_lock(&(net_data->vehicle_data_mutex));
         g_tree_replace(net_data->vehicle_data_tree, g_memdup(&timestamp,
@@ -1754,3 +1758,291 @@ static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     }
     g_byte_array_append(packet, &u8_value, 1);
 }
+
+static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
+    GHashTable *log_table)
+{
+    guint8 u8_value;
+    guint16 u16_value;
+    const TLLoggerLogItemData *item_data;
+    GHashTable *index_table;
+    GHashTableIter iter;
+    GHashTable *state_table, *controller_temp_table, *spin_speed_table;
+    GHashTable *torque_table, *temperature_table, *controller_voltage_table;
+    GHashTable *controller_current_table;
+    gdouble controller_voltage_unit = 1.0;
+    gdouble controller_current_unit = 1.0;
+    guint table_size, i = 0;
+    gpointer key;
+    gint index;
+    const gint64 *raw_value;
+    gint64 temp;
+    
+    u8_value = TL_NET_VEHICLE_DATA_TYPE_DRIVE_MOTOR;
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_DRIVE_MOTOR_INDEX);
+    if(item_data==NULL || !item_data->list_index ||
+        item_data->list_table==NULL)  
+    {
+        u8_value = 0;
+        g_byte_array_append(packet, &u8_value, 1);
+        return;
+    }
+    index_table = item_data->list_table;
+    
+    table_size = g_hash_table_size(index_table);
+    if(table_size>253)
+    {
+        table_size = 253;
+    }
+    u8_value = table_size;
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_DRIVE_MOTOR_STATE);
+    if(item_data!=NULL && item_data->list_parent!=NULL)
+    {
+        state_table = item_data->list_table;
+    }
+    else
+    {
+        state_table = NULL;
+    }
+
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_DRIVE_MOTOR_CONTROLLER_TEMPERATURE);
+    if(item_data!=NULL && item_data->list_parent!=NULL)
+    {
+        controller_temp_table = item_data->list_table;
+    }
+    else
+    {
+        controller_temp_table = NULL;
+    }
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_DRIVE_MOTOR_SPIN_SPEED);
+    if(item_data!=NULL && item_data->list_parent!=NULL)
+    {
+        spin_speed_table = item_data->list_table;
+    }
+    else
+    {
+        spin_speed_table = NULL;
+    }
+        
+    item_data = g_hash_table_lookup(log_table, TL_PARSER_DRIVE_MOTOR_TORQUE);
+    if(item_data!=NULL && item_data->list_parent!=NULL)
+    {
+        torque_table = item_data->list_table;
+    }
+    else
+    {
+        torque_table = NULL;
+    }
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_DRIVE_MOTOR_TEMPERATURE);
+    if(item_data!=NULL && item_data->list_parent!=NULL)
+    {
+        temperature_table = item_data->list_table;
+    }
+    else
+    {
+        temperature_table = NULL;
+    }
+        
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_DRIVE_MOTOR_CONTROLLER_VOLTAGE);
+    if(item_data!=NULL && item_data->list_parent!=NULL)
+    {
+        controller_voltage_table = item_data->list_table;
+        controller_voltage_unit = item_data->unit;
+    }
+    else
+    {
+        controller_voltage_table = NULL;
+    }
+        
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_DRIVE_MOTOR_CONTROLLER_CURRENT);
+    if(item_data!=NULL && item_data->list_parent!=NULL)
+    {
+        controller_current_table = item_data->list_table;
+        controller_current_unit = item_data->unit;
+    }
+    else
+    {
+        controller_current_table = NULL;
+    }
+    
+    g_hash_table_iter_init(&iter, index_table);
+    while(g_hash_table_iter_next(&iter, &key, NULL) && i<253)
+    {
+        i++;
+        index = GPOINTER_TO_INT(key);
+        
+        u8_value = index;
+        g_byte_array_append(packet, &u8_value, 1);
+        
+        u8_value = 0xFF;
+        if(state_table!=NULL)
+        {
+            raw_value = g_hash_table_lookup(state_table, key);
+            if(raw_value!=NULL)
+            {
+                switch(*raw_value)
+                {
+                    case 0:
+                    {
+                        u8_value = 3;
+                        break;
+                    }
+                    case 1:
+                    {
+                        u8_value = 4;
+                        break;
+                    }
+                    case 3:
+                    {
+                        u8_value = 1;
+                        break;
+                    }
+                    case 4:
+                    {
+                        u8_value = 2;
+                        break;
+                    }
+                    case 5:
+                    {
+                        u8_value = 0xFE;
+                        break;
+                    }
+                    default:
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        g_byte_array_append(packet, &u8_value, 1);
+        
+        u8_value = 0xFF;
+        if(controller_temp_table!=NULL)
+        {
+            raw_value = g_hash_table_lookup(controller_temp_table, key);
+            if(raw_value!=NULL)
+            {
+                if(*raw_value <= 210 && *raw_value >= -40)
+                {
+                    u8_value = *raw_value + 40;
+                }
+                else
+                {
+                    u8_value = 0xFE;
+                }
+            }
+        }
+        g_byte_array_append(packet, &u8_value, 1);
+        
+        u16_value = 0xFFFF;
+        if(spin_speed_table!=NULL)
+        {
+            raw_value = g_hash_table_lookup(spin_speed_table, key);
+            if(raw_value!=NULL)
+            {
+                if(*raw_value <= 45531 && *raw_value >= -20000)
+                {
+                    u16_value = *raw_value + 20000;
+                }
+                else
+                {
+                    u16_value = 0xFFFE;
+                }
+            }
+        }
+        u16_value = g_htons(u16_value);
+        g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+        
+        u16_value = 0xFFFF;
+        if(torque_table!=NULL)
+        {
+            raw_value = g_hash_table_lookup(torque_table, key);
+            if(raw_value!=NULL)
+            {
+                if(*raw_value * 10 <= 45531 && *raw_value * 10 >= -20000)
+                {
+                    u16_value = *raw_value * 10 + 20000;
+                }
+                else
+                {
+                    u16_value = 0xFFFE;
+                }
+            }
+        }
+        u16_value = g_htons(u16_value);
+        g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+
+        u8_value = 0xFF;
+        if(temperature_table!=NULL)
+        {
+            raw_value = g_hash_table_lookup(temperature_table, key);
+            if(raw_value!=NULL)
+            {
+                if(*raw_value <= 210 && *raw_value >= -40)
+                {
+                    u8_value = *raw_value + 40;
+                }
+                else
+                {
+                    u8_value = 0xFE;
+                }
+            }
+        }
+        g_byte_array_append(packet, &u8_value, 1);
+        
+        u16_value = 0xFFFF;
+        if(controller_voltage_table!=NULL)
+        {
+            raw_value = g_hash_table_lookup(controller_voltage_table, key);
+            if(raw_value!=NULL)
+            {
+                temp = (gdouble)*raw_value * controller_voltage_unit;
+                temp *= 10;
+                if(temp<=60000 && temp>=0)
+                {
+                    u16_value = temp;
+                }
+                else
+                {
+                    u16_value = 0xFFFE;
+                }
+            }
+        }
+        u16_value = g_htons(u16_value);
+        g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+        
+        u16_value = 0xFFFF;
+        if(controller_current_table!=NULL)
+        {
+            raw_value = g_hash_table_lookup(controller_current_table, key);
+            if(raw_value!=NULL)
+            {
+                temp = (gdouble)*raw_value * controller_current_unit;
+                temp *= 10;
+                temp += 10000;
+                if(temp<=20000 && temp>=0)
+                {
+                    u16_value = temp;
+                }
+                else
+                {
+                    u16_value = 0xFFFE;
+                }
+            }
+        }
+        u16_value = g_htons(u16_value);
+        g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+    }
+}
+
