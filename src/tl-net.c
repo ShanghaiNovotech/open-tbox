@@ -1623,7 +1623,8 @@ static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     item_data = g_hash_table_lookup(log_table, TL_PARSER_TOTAL_CURRENT);
     if(item_data!=NULL)
     {
-        u16_value = ((gdouble)item_data->value * item_data->unit) + 1000;
+        u16_value = ((gdouble)item_data->value * item_data->unit +
+            item_data->offset) + 1000;
         u16_value *= 10;
         if(u16_value <= 20000)
         {
@@ -1772,6 +1773,10 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
     GHashTable *controller_current_table;
     gdouble controller_voltage_unit = 1.0;
     gdouble controller_current_unit = 1.0;
+    gint controller_temp_offset = 0;
+    gint torque_offset = 0;
+    gint temperature_offset = 0;
+    gint controller_current_offset = 0;
     guint table_size, i = 0;
     gpointer key;
     gint index;
@@ -1814,6 +1819,7 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
     if(item_data!=NULL && item_data->list_parent!=NULL)
     {
         controller_temp_table = item_data->list_table;
+        controller_temp_offset = item_data->offset;
     }
     else
     {
@@ -1835,6 +1841,7 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
     if(item_data!=NULL && item_data->list_parent!=NULL)
     {
         torque_table = item_data->list_table;
+        torque_offset = item_data->offset;
     }
     else
     {
@@ -1846,6 +1853,7 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
     if(item_data!=NULL && item_data->list_parent!=NULL)
     {
         temperature_table = item_data->list_table;
+        temperature_offset = item_data->offset;
     }
     else
     {
@@ -1870,6 +1878,7 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
     {
         controller_current_table = item_data->list_table;
         controller_current_unit = item_data->unit;
+        controller_current_offset = item_data->offset;
     }
     else
     {
@@ -1933,6 +1942,7 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
             raw_value = g_hash_table_lookup(controller_temp_table, key);
             if(raw_value!=NULL)
             {
+                temp = *raw_value + controller_temp_offset;
                 if(*raw_value <= 210 && *raw_value >= -40)
                 {
                     u8_value = *raw_value + 40;
@@ -1970,6 +1980,7 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
             raw_value = g_hash_table_lookup(torque_table, key);
             if(raw_value!=NULL)
             {
+                temp = *raw_value + torque_offset;
                 if(*raw_value * 10 <= 45531 && *raw_value * 10 >= -20000)
                 {
                     u16_value = *raw_value * 10 + 20000;
@@ -1989,9 +2000,10 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
             raw_value = g_hash_table_lookup(temperature_table, key);
             if(raw_value!=NULL)
             {
-                if(*raw_value <= 210 && *raw_value >= -40)
+                temp = *raw_value + temperature_offset;
+                if(temp <= 210 && temp >= -40)
                 {
-                    u8_value = *raw_value + 40;
+                    u8_value = temp + 40;
                 }
                 else
                 {
@@ -2028,7 +2040,8 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
             raw_value = g_hash_table_lookup(controller_current_table, key);
             if(raw_value!=NULL)
             {
-                temp = (gdouble)*raw_value * controller_current_unit;
+                temp = (gdouble)*raw_value * controller_current_unit +
+                    controller_current_offset;
                 temp *= 10;
                 temp += 10000;
                 if(temp<=20000 && temp>=0)

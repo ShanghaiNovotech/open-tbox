@@ -7,6 +7,7 @@ typedef struct _TLLoggerLogItemData
 {
     gchar *name;
     gint64 value;
+    gint offset;
     gdouble unit;
     guint list_item;
     gint8 source;

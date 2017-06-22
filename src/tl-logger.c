@@ -413,6 +413,9 @@ static GByteArray *tl_logger_log_to_file_data(GHashTable *log_data)
         child = json_object_new_int64(item_data->value);
         json_object_object_add(item_object, "value", child);
         
+        child = json_object_new_int(item_data->offset);
+        json_object_object_add(item_object, "offset", child);
+        
         child = json_object_new_double(item_data->unit);
         json_object_object_add(item_object, "unit", child);
         
@@ -664,6 +667,7 @@ static gboolean tl_logger_log_query_file_cb(TLLoggerData *logger_data,
     TLLoggerLogItemData *log_item_data;
     gint64 log_value;
     gint log_source;
+    gint log_offset;
     gdouble log_unit;
     gboolean list_index;
     gint64 i64value;
@@ -721,6 +725,16 @@ static gboolean tl_logger_log_query_file_cb(TLLoggerData *logger_data,
         else
         {
             log_unit = 1.0;
+        }
+        
+        json_object_object_get_ex(node, "offset", &child);
+        if(child!=NULL)
+        {
+            log_offset = json_object_get_int(child);
+        }
+        else
+        {
+            log_offset = 0;
         }
         
         json_object_object_get_ex(node, "source", &child);
@@ -823,6 +837,7 @@ static gboolean tl_logger_log_query_file_cb(TLLoggerData *logger_data,
         log_item_data->value = log_value;
         log_item_data->source = log_source;
         log_item_data->unit = log_unit;
+        log_item_data->offset = log_offset;
         
         if(list_index && value_table!=NULL)
         {
@@ -1409,6 +1424,7 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
             idata->value = item_data->value;
             idata->unit = item_data->unit;
             idata->source = item_data->source;
+            idata->offset = item_data->offset;
             
             if(item_data->list_index)
             {
@@ -1427,18 +1443,19 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
     }
     else
     {
-        idata = g_new(TLLoggerLogItemData, 1);
+        idata = g_new0(TLLoggerLogItemData, 1);
         idata->name = g_strdup(item_data->name);
         idata->value = item_data->value;
         idata->unit = item_data->unit;
         idata->source = item_data->source;
         idata->list_index = item_data->list_index;
+        idata->offset = item_data->offset;
         
         if(item_data->list_index)
         {
             idata->list_table = g_hash_table_new_full(g_direct_hash,
                 g_direct_equal, NULL, g_free);
-            
+            idata->list_index = item_data->list_index;
             pindex = item_data->value;
             g_hash_table_replace(idata->list_table,
                 GINT_TO_POINTER(pindex), g_memdup(&(item_data->value),
@@ -1446,6 +1463,7 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
         }
         else if(item_data->list_parent!=NULL)
         {
+            idata->list_parent = g_strdup(item_data->list_parent);
             idata->list_table = g_hash_table_new_full(g_direct_hash,
                 g_direct_equal, NULL, g_free);
             
