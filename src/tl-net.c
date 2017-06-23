@@ -105,17 +105,6 @@ typedef enum
 
 typedef enum
 {
-    TL_NET_DATA_TYPE_TOTAL_VEHICLE = 0x1,
-    TL_NET_DATA_TYPE_DRIVE_MOTOR = 0x2,
-    TL_NET_DATA_TYPE_FUEL_BATTERY = 0x3,
-    TL_NET_DATA_TYPE_ENGINE = 0x4,
-    TL_NET_DATA_TYPE_VEHICLE_POSITION = 0x5,
-    TL_NET_DATA_TYPE_EXTREMUM = 0x6,
-    TL_NET_DATA_TYPE_ALARM = 0x7
-}TLNetDataType;
-
-typedef enum
-{
     TL_NET_PACKET_ENCRYPTION_TYPE_NONE = 0x1,
     TL_NET_PACKET_ENCRYPTION_TYPE_RSA = 0x2,
     TL_NET_PACKET_ENCRYPTION_TYPE_AES = 0x3,
@@ -144,6 +133,10 @@ static TLNetData g_tl_net_data = {0};
 static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     GHashTable *log_table);
 static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
+    GHashTable *log_table);
+static void tl_net_vehicle_packet_build_extreme_data(GByteArray *packet,
+    GHashTable *log_table);
+static void tl_net_vehicle_packet_build_alarm_data(GByteArray *packet,
     GHashTable *log_table);
 
 static TLNetWriteBufferData *tl_net_write_buffer_data_new(GByteArray *ba)
@@ -1251,6 +1244,8 @@ static gboolean tl_net_vehicle_data_report_timeout(gpointer user_data)
         tl_net_vehicle_packet_build_total_data(packet, current_data_table);
         tl_net_vehicle_packet_build_drive_motor_data(packet,
             current_data_table);
+        tl_net_vehicle_packet_build_extreme_data(packet, current_data_table);
+        tl_net_vehicle_packet_build_alarm_data(packet, current_data_table);
         
         g_mutex_lock(&(net_data->vehicle_data_mutex));
         g_tree_replace(net_data->vehicle_data_tree, g_memdup(&timestamp,
@@ -1943,9 +1938,9 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
             if(raw_value!=NULL)
             {
                 temp = *raw_value + controller_temp_offset;
-                if(*raw_value <= 210 && *raw_value >= -40)
+                if(temp <= 210 && temp >= -40)
                 {
-                    u8_value = *raw_value + 40;
+                    u8_value = temp + 40;
                 }
                 else
                 {
@@ -1981,9 +1976,10 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
             if(raw_value!=NULL)
             {
                 temp = *raw_value + torque_offset;
-                if(*raw_value * 10 <= 45531 && *raw_value * 10 >= -20000)
+                temp *= 10;
+                if(temp <= 45531 && temp >= -20000)
                 {
-                    u16_value = *raw_value * 10 + 20000;
+                    u16_value = temp + 20000;
                 }
                 else
                 {
@@ -2040,9 +2036,8 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
             raw_value = g_hash_table_lookup(controller_current_table, key);
             if(raw_value!=NULL)
             {
-                temp = (gdouble)*raw_value * controller_current_unit +
-                    controller_current_offset;
-                temp *= 10;
+                temp = ((gdouble)*raw_value * controller_current_unit +
+                    controller_current_offset) * 10;
                 temp += 10000;
                 if(temp<=20000 && temp>=0)
                 {
@@ -2059,3 +2054,259 @@ static void tl_net_vehicle_packet_build_drive_motor_data(GByteArray *packet,
     }
 }
 
+static void tl_net_vehicle_packet_build_extreme_data(GByteArray *packet,
+    GHashTable *log_table)
+{
+    guint8 u8_value;
+    guint16 u16_value;
+    const TLLoggerLogItemData *item_data;
+    
+    u8_value = TL_NET_VEHICLE_DATA_TYPE_EXTREMUM;
+    g_byte_array_append(packet, &u8_value, 1);
+
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_SUBSYSTEM_MAX_VOLTAGE_ID);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>250)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_CELL_MAX_VOLTAGE_ID);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>250)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_CELL_MAX_VOLTAGE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>15000)
+        {
+            u16_value = 0xFFFE;
+        }
+        else
+        {
+            u16_value = item_data->value + item_data->offset;
+        }
+    }
+    else
+    {
+        u16_value = 0xFFFF;
+    }
+    u16_value = g_htons(u16_value);
+    g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_SUBSYSTEM_MIN_VOLTAGE_ID);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>250)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_CELL_MIN_VOLTAGE_ID);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>250)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_CELL_MIN_VOLTAGE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>15000)
+        {
+            u16_value = 0xFFFE;
+        }
+        else
+        {
+            u16_value = item_data->value + item_data->offset;
+        }
+    }
+    else
+    {
+        u16_value = 0xFFFF;
+    }
+    u16_value = g_htons(u16_value);
+    g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_SUBSYSTEM_MAX_TEMPERATURE_ID);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>250)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_CELL_MAX_TEMPERATURE_ID);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>250)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_CELL_MAX_TEMPERATURE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>250)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_SUBSYSTEM_MIN_TEMPERATURE_ID);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>250)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_CELL_MIN_TEMPERATURE_ID);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>250)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_CELL_MIN_TEMPERATURE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>250)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
+}
+
+static void tl_net_vehicle_packet_build_alarm_data(GByteArray *packet,
+    GHashTable *log_table)
+{
+    guint8 u8_value;
+    guint16 u16_value;
+    const TLLoggerLogItemData *item_data;
+    
+    u8_value = TL_NET_VEHICLE_DATA_TYPE_ALARM;
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    
+    
+    
+    
+}
