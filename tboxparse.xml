@@ -27,20 +27,42 @@
   <signal id='0x62' name='VCU05_CapVoltage' byteorder='BE' firstbyte='6' firstbit='52' bitlength='10' unit='0.5' offset='0' listparent='VCU08_EMIndex' source='0' />
   <signal id='0x62' name='VCU05_PTCurrent' byteorder='BE' firstbyte='3' firstbit='28' bitlength='12' unit='0.25' offset='-512' listparent='VCU08_EMIndex' source='0' />
 
-  <signal id='0x430' name='BMS08_BatIndex' byteorder='BE' firstbyte='0' firstbit='4' bitlength='2' unit='1' offset='0' listitem='0' source='0' />
-  <signal id='0x182' name='BMS05_MaxVoltCellID' byteorder='BE' firstbyte='1' firstbit='8' bitlength='8' unit='1' offset='0' listitem='0' source='0' />
-  <signal id='0x182' name='BMS05_MaxCellVolt' byteorder='BE' firstbyte='3' firstbit='28' bitlength='12' unit='1' offset='1000' listitem='0' source='0' />
-  <signal id='0x182' name='BMS05_MinVoltCellID' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='0' listitem='0' source='0' />
-  <signal id='0x182' name='BMS05_MinCellVolt' byteorder='BE' firstbyte='4' firstbit='32' bitlength='12' unit='1' offset='1000' listitem='0' source='0' />
-  <signal id='0x196' name='BMS06_MaxTempCellID' byteorder='BE' firstbyte='3' firstbit='24' bitlength='8' unit='1' offset='0' listitem='0' source='0' />
-  <signal id='0x196' name='BMS06_MaxTemp' byteorder='BE' firstbyte='2' firstbit='16' bitlength='8' unit='1' offset='-40' listitem='0' source='0' />
-  <signal id='0x196' name='BMS06_MinTempCellID' byteorder='BE' firstbyte='5' firstbit='40' bitlength='8' unit='1' offset='0' listitem='0' source='0' />
-  <signal id='0x196' name='BMS06_MinTemp' byteorder='BE' firstbyte='4' firstbit='32' bitlength='8' unit='1' offset='-40' listitem='0' source='0' />
+  <signal id='0x430' name='BMS08_BatIndex' byteorder='BE' firstbyte='0' firstbit='4' bitlength='2' unit='1' offset='0' source='0' />
+  <signal id='0x182' name='BMS05_MaxVoltCellID' byteorder='BE' firstbyte='1' firstbit='8' bitlength='8' unit='1' offset='0' source='0' />
+  <signal id='0x182' name='BMS05_MaxCellVolt' byteorder='BE' firstbyte='3' firstbit='28' bitlength='12' unit='1' offset='1000' source='0' />
+  <signal id='0x182' name='BMS05_MinVoltCellID' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='0' source='0' />
+  <signal id='0x182' name='BMS05_MinCellVolt' byteorder='BE' firstbyte='4' firstbit='32' bitlength='12' unit='1' offset='1000' source='0' />
+  <signal id='0x196' name='BMS06_MaxTempCellID' byteorder='BE' firstbyte='3' firstbit='24' bitlength='8' unit='1' offset='0' source='0' />
+  <signal id='0x196' name='BMS06_MaxTemp' byteorder='BE' firstbyte='2' firstbit='16' bitlength='8' unit='1' offset='-40' source='0' />
+  <signal id='0x196' name='BMS06_MinTempCellID' byteorder='BE' firstbyte='5' firstbit='40' bitlength='8' unit='1' offset='0' source='0' />
+  <signal id='0x196' name='BMS06_MinTemp' byteorder='BE' firstbyte='4' firstbit='32' bitlength='8' unit='1' offset='-40' source='0' />
+
+  <signal id='0x102' name='VCU01_VehicleFaultLevel' byteorder='BE' firstbyte='6' firstbit='48' bitlength='2' unit='1' offset='0' source='0' />
+  <signal id='0x102' name='BMS02_FaultTempDiff' byteorder='BE' firstbyte='5' firstbit='46' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultOverTemp' byteorder='BE' firstbyte='5' firstbit='45' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultOverVolt' byteorder='BE' firstbyte='6' firstbit='53' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultUnderVolt' byteorder='BE' firstbyte='6' firstbit='52' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultSOCLow' byteorder='BE' firstbyte='5' firstbit='43' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultCellOverVolt' byteorder='BE' firstbyte='6' firstbit='55' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultCellUnderVolt' byteorder='BE' firstbyte='6' firstbit='54' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultSOCHigh' byteorder='BE' firstbyte='5' firstbit='44' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x102' name='VCU01_FaultSOCJump' byteorder='BE' firstbyte='5' firstbit='43' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultMismatch' byteorder='BE' firstbyte='4' firstbit='32' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultConsist' byteorder='BE' firstbyte='4' firstbit='34' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultIsoLow' byteorder='BE' firstbyte='4' firstbit='33' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x410' name='VCU09_bOverTemp' byteorder='BE' firstbyte='6' firstbit='53' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x102' name='VCU01_FaultEVP' byteorder='BE' firstbyte='5' firstbit='44' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x102' name='VCU01_FaultDCDC' byteorder='BE' firstbyte='0' firstbit='6' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x102' name='VCU01_bVPUOverTemp' byteorder='BE' firstbyte='1' firstbit='14' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x6E' name='BMS01_EmgcyOff_Pilot' byteorder='BE' firstbyte='6' firstbit='54' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x102' name='VCU01_bEMOverTemp' byteorder='BE' firstbyte='1' firstbit='13' bitlength='1' unit='1' offset='0' source='0' />
+  <signal id='0x70' name='BMS02_FaultSOCHigh' byteorder='BE' firstbyte='5' firstbit='44' bitlength='1' unit='1' offset='0' source='0' />
+
 </tbox>
 
 <template>
-  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' listitem='0' source='0' />
-  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' listitem='0' source='0' />
-  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' listitem='0' source='0' />
-  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' listitem='0' source='0' />
+  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' source='0' />
+  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' source='0' />
+  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' source='0' />
+  <signal id='0x' name='' byteorder='BE' firstbyte='' firstbit='' bitlength='' unit='1' offset='0' source='0' />
 </template>

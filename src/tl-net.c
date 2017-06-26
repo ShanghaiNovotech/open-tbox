@@ -60,7 +60,12 @@ typedef struct _TLNetData
     GTree *vehicle_data_tree;
     GMutex vehicle_data_mutex;
     
+    GQueue *vehicle_backlog_data_queue;
+    GMutex vehicle_backlog_data_mutex;
+    
     guint vehicle_data_report_timer_timeout;
+    
+    guint vehicle_last_alarm_level;
 }TLNetData;
 
 typedef struct _TLNetWriteBufferData
@@ -69,6 +74,12 @@ typedef struct _TLNetWriteBufferData
     gboolean request_answer;
     guint8 request_type;
 }TLNetWriteBufferData;
+
+typedef struct _TLNetBacklogData
+{
+    gint64 timestamp;
+    GByteArray *backlog;
+}TLNetBacklogData;
 
 typedef enum
 {
@@ -158,6 +169,19 @@ static void tl_net_write_buffer_data_free(TLNetWriteBufferData *data)
     if(data->buffer!=NULL)
     {
         g_byte_array_unref(data->buffer);
+    }
+    g_free(data);
+}
+
+static void tl_net_backlog_data_free(TLNetBacklogData *data)
+{
+    if(data==NULL)
+    {
+        return;
+    }
+    if(data->backlog!=NULL)
+    {
+        g_byte_array_unref(data->backlog);
     }
     g_free(data);
 }
@@ -1326,9 +1350,11 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     
     
     g_mutex_init(&(g_tl_net_data.vehicle_data_mutex));
+    g_mutex_init(&(g_tl_net_data.vehicle_backlog_data_mutex));
     
     g_tl_net_data.vehicle_data_tree = g_tree_new_full(tl_net_int64ptr_compare,
         NULL, g_free, (GDestroyNotify)g_byte_array_unref);
+    g_tl_net_data.vehicle_backlog_data_queue = g_queue_new();
     
     
     g_tl_net_data.vehicle_packet_read_buffer = g_byte_array_new();
@@ -1448,12 +1474,25 @@ void tl_net_uninit()
         g_tl_net_data.vehicle_write_queue = NULL;
     }
     
+    g_mutex_lock(&(g_tl_net_data.vehicle_data_mutex));
     if(g_tl_net_data.vehicle_data_tree!=NULL)
     {
         g_tree_unref(g_tl_net_data.vehicle_data_tree);
         g_tl_net_data.vehicle_data_tree = NULL;
     }
+    g_mutex_unlock(&(g_tl_net_data.vehicle_data_mutex));
+    
+    g_mutex_lock(&(g_tl_net_data.vehicle_backlog_data_mutex));
+    if(g_tl_net_data.vehicle_backlog_data_queue!=NULL)
+    {
+        g_queue_free_full(g_tl_net_data.vehicle_backlog_data_queue,
+            (GDestroyNotify)tl_net_backlog_data_free);
+        g_tl_net_data.vehicle_backlog_data_queue = NULL;
+    }
+    g_mutex_unlock(&(g_tl_net_data.vehicle_backlog_data_mutex));
+    
     g_mutex_clear(&(g_tl_net_data.vehicle_data_mutex));
+    g_mutex_clear(&(g_tl_net_data.vehicle_backlog_data_mutex));
     
     if(g_tl_net_data.iccid!=NULL)
     {
@@ -2299,14 +2338,208 @@ static void tl_net_vehicle_packet_build_alarm_data(GByteArray *packet,
     GHashTable *log_table)
 {
     guint8 u8_value;
-    guint16 u16_value;
+    guint32 u32_value;
     const TLLoggerLogItemData *item_data;
     
     u8_value = TL_NET_VEHICLE_DATA_TYPE_ALARM;
     g_byte_array_append(packet, &u8_value, 1);
     
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_VEHICLE_FAULT_LEVEL);
+    if(item_data!=NULL)
+    {
+        if(item_data->value>3)
+        {
+            u8_value = 0xFE;
+        }
+        else
+        {
+            u8_value = item_data->value;
+        }
+    }
+    else
+    {
+        u8_value = 0xFF;
+    }
+    g_byte_array_append(packet, &u8_value, 1);
     
+    u32_value = 0;
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_TEMPERATURE_DIFF);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 0);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_BATTERY_OVERHEAT);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 1);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_BATTERY_OVERVOLTAGE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 2);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_BATTERY_UNDERVOLTAGE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 3);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_SOC_LOW);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 4);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_BATTERY_CELL_OVERVOLTAGE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 5);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_BATTERY_CELL_UNDERVOLTAGE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 6);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_SOC_HIGH);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 7);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_SOC_JUMP);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 8);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_BATTERY_MISMATCH);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 9);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_BATTERY_CONSIST);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 10);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_BAD_INSULATION);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 11);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_DC2DC_OVERHEAT);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 12);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_EVP);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 13);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_DC2DC);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 14);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_DRIVE_MOTOR_CONTROLLER_TEMPERATURE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 15);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_EMERGENCY_OFF_PILOT);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 16);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_DRIVE_MOTOR_TEMPERATURE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 17);
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_ALARM_SOC_OVERCHARGE);
+    if(item_data!=NULL)
+    {
+        if(item_data->value!=0)
+        {
+            u32_value |= (1 << 18);
+        }
+    }
+    g_byte_array_append(packet, (const guint8 *)&u32_value, 4);
     
-    
-    
+    u8_value = 0;
+    g_byte_array_append(packet, &u8_value, 1);
+    g_byte_array_append(packet, &u8_value, 1);
+    g_byte_array_append(packet, &u8_value, 1);
+    g_byte_array_append(packet, &u8_value, 1);
 }
