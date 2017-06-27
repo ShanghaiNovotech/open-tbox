@@ -4,6 +4,8 @@
 #include "tl-logger.h"
 #include "tl-parser.h"
 
+#define TL_NET_BACKLOG_MAXIMUM 45
+
 typedef struct _TLNetData
 {
     gboolean initialized;
@@ -1221,18 +1223,14 @@ static gboolean tl_net_vehicle_data_report_timeout(gpointer user_data)
     GHashTable *current_data_table;
     TLLoggerLogItemData *log_item_data;
     gint64 now, report_timeout;
-    GByteArray *packet;
+    GByteArray *packet, *packet_dup;
     GDateTime *dt;
     gint64 timestamp;
+    TLNetBacklogData *backlog_data;
     
     if(user_data==NULL)
     {
         return FALSE;
-    }
-    
-    if(!net_data->first_connected)
-    {
-        return TRUE;
     }
     
     current_data_table = tl_logger_current_data_get(&updated);
@@ -1241,12 +1239,66 @@ static gboolean tl_net_vehicle_data_report_timeout(gpointer user_data)
         return TRUE;
     }
     
+    dt = g_date_time_new_now_local();
+    timestamp = g_date_time_to_unix(dt);
+    g_date_time_unref(dt);
+        
+    packet = g_byte_array_new();
+        
+    tl_net_vehicle_packet_build_total_data(packet, current_data_table);
+    tl_net_vehicle_packet_build_drive_motor_data(packet,
+        current_data_table);
+    tl_net_vehicle_packet_build_extreme_data(packet, current_data_table);
+    tl_net_vehicle_packet_build_alarm_data(packet, current_data_table);
+    
+    g_mutex_lock(&(net_data->vehicle_backlog_data_mutex));
+    
+    while(g_queue_get_length(net_data->vehicle_backlog_data_queue)>=
+        TL_NET_BACKLOG_MAXIMUM)
+    {
+        backlog_data  = g_queue_pop_head(net_data->vehicle_backlog_data_queue);
+        tl_net_backlog_data_free(backlog_data);
+    }
+    
+    backlog_data = g_new0(TLNetBacklogData, 1);
+    backlog_data->backlog = packet;
+    backlog_data->timestamp = timestamp;
+    g_queue_push_tail(net_data->vehicle_backlog_data_queue, backlog_data);
+    
+    g_mutex_unlock(&(net_data->vehicle_backlog_data_mutex));
+    
     log_item_data = g_hash_table_lookup(current_data_table,
         TL_PARSER_VEHICLE_FAULT_LEVEL);
     if(log_item_data!=NULL)
     {
         net_data->vehicle_data_report_is_emergency =
             (log_item_data->value >= 3);
+            
+        if(net_data->vehicle_last_alarm_level<3 &&
+            net_data->vehicle_data_report_is_emergency)
+        {
+            while(g_queue_get_length(net_data->vehicle_backlog_data_queue)>0)
+            {
+                backlog_data =
+                    g_queue_pop_head(net_data->vehicle_backlog_data_queue);
+                if(timestamp - backlog_data->timestamp <= 3e7)
+                {
+                    g_mutex_lock(&(net_data->vehicle_data_mutex));
+                    g_tree_replace(net_data->vehicle_data_tree,
+                        g_memdup(&(backlog_data->timestamp), sizeof(gint64)),
+                        g_byte_array_ref(backlog_data->backlog));
+                    g_mutex_unlock(&(net_data->vehicle_data_mutex));
+                }
+                
+                tl_net_backlog_data_free(backlog_data);
+            }
+        }
+        net_data->vehicle_last_alarm_level = log_item_data->value;
+    }
+    
+    if(!net_data->first_connected)
+    {
+        return TRUE;
     }
     
     now = g_get_monotonic_time();
@@ -1259,21 +1311,12 @@ static gboolean tl_net_vehicle_data_report_timeout(gpointer user_data)
     if(now - net_data->vehicle_data_report_timestamp >=
         report_timeout)
     {
-        dt = g_date_time_new_now_local();
-        timestamp = g_date_time_to_unix(dt);
-        g_date_time_unref(dt);
-        
-        packet = g_byte_array_new();
-        
-        tl_net_vehicle_packet_build_total_data(packet, current_data_table);
-        tl_net_vehicle_packet_build_drive_motor_data(packet,
-            current_data_table);
-        tl_net_vehicle_packet_build_extreme_data(packet, current_data_table);
-        tl_net_vehicle_packet_build_alarm_data(packet, current_data_table);
+        packet_dup = g_byte_array_new();
+        g_byte_array_append(packet_dup, packet->data, packet->len);
         
         g_mutex_lock(&(net_data->vehicle_data_mutex));
         g_tree_replace(net_data->vehicle_data_tree, g_memdup(&timestamp,
-            sizeof(gint64)), packet);
+            sizeof(gint64)), packet_dup);
         g_mutex_unlock(&(net_data->vehicle_data_mutex));
         
         net_data->vehicle_data_report_timestamp = now;
@@ -1347,7 +1390,7 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     g_tl_net_data.vehicle_data_report_is_emergency = FALSE;
     
     g_tl_net_data.vehicle_connection_state = 0;
-    
+    g_tl_net_data.vehicle_last_alarm_level = 0;
     
     g_mutex_init(&(g_tl_net_data.vehicle_data_mutex));
     g_mutex_init(&(g_tl_net_data.vehicle_backlog_data_mutex));
@@ -1355,7 +1398,6 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     g_tl_net_data.vehicle_data_tree = g_tree_new_full(tl_net_int64ptr_compare,
         NULL, g_free, (GDestroyNotify)g_byte_array_unref);
     g_tl_net_data.vehicle_backlog_data_queue = g_queue_new();
-    
     
     g_tl_net_data.vehicle_packet_read_buffer = g_byte_array_new();
     g_tl_net_data.vehicle_write_queue = g_queue_new();
