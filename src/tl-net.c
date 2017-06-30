@@ -5,11 +5,13 @@
 #include "tl-parser.h"
 
 #define TL_NET_BACKLOG_MAXIMUM 45
+#define TL_NET_LOG_TO_DISK_TRIGGER 2048
 
 typedef struct _TLNetData
 {
     gboolean initialized;
     gchar *conf_file_path;
+    gchar *log_path;
     
     GSocketClient *vehicle_client;
     GSocketConnection *vehicle_connection;
@@ -25,6 +27,9 @@ typedef struct _TLNetData
     GQueue *vehicle_write_queue;
     GByteArray *vehicle_packet_read_buffer;
     gssize vehicle_packet_read_expect_length;
+    
+    GThread *vehicle_data_log_thread;
+    gboolean vehicle_data_log_thread_work_flag;
     
     GList *vehicle_server_list;
     GList *current_vehicle_server;
@@ -68,6 +73,10 @@ typedef struct _TLNetData
     guint vehicle_data_report_timer_timeout;
     
     guint vehicle_last_alarm_level;
+    
+    GByteArray *vehicle_data_file_buffer;
+    guint vehicle_data_file_node_count;
+    GSList *vehicle_data_file_remove_list;
 }TLNetData;
 
 typedef struct _TLNetWriteBufferData
@@ -1357,8 +1366,96 @@ static gint tl_net_int64ptr_compare(gconstpointer a, gconstpointer b,
     }
 }
 
+static gboolean tl_net_vehicle_data_to_file_traverse(gpointer key,
+    gpointer value, gpointer user_data)
+{
+    TLNetData *net_data = (TLNetData *)user_data;
+    gint64 *timestamp = (gint64 *)key;
+    GByteArray *packet = (GByteArray *)value;
+    
+    if(user_data==NULL || key==NULL)
+    {
+        return TRUE;
+    }
+    
+    if(value==NULL)
+    {
+        vehicle_data_file_remove_list = g_slist_prepend(
+            vehicle_data_file_remove_list, key);
+        return FALSE;
+    }
+    
+    //TODO: Save to file buffer.
+    
+    net_data->vehicle_data_file_node_count++;
+    vehicle_data_file_remove_list = g_slist_prepend(
+        vehicle_data_file_remove_list, key);
+    
+    return (net_data->vehicle_data_file_node_count >
+        TL_NET_LOG_TO_DISK_TRIGGER/2);
+}
+
+static gpointer tl_net_vehicle_data_log_thread(gpointer user_data)
+{
+    TLNetData *net_data = (TLNetData *)user_data;
+    guint tree_len;
+    GSList *list_foreach;
+    
+    if(user_data==NULL)
+    {
+        return NULL;
+    }
+    
+    net_data->vehicle_data_log_thread_work_flag = TRUE;
+    
+    while(net_data->vehicle_data_log_thread_work_flag)
+    {
+        g_mutex_lock(&(net_data->vehicle_data_mutex));
+        tree_len = g_tree_nnodes(net_data->vehicle_data_tree);
+        g_mutex_unlock(&(net_data->vehicle_data_mutex));
+        
+        if(tree_len > TL_NET_LOG_TO_DISK_TRIGGER)
+        {
+            net_data->vehicle_data_file_remove_list = NULL;
+            net_data->vehicle_data_file_node_count = 0;
+            net_data->vehicle_data_file_buffer = g_byte_array_new();
+            
+            g_mutex_lock(&(net_data->vehicle_data_mutex));
+            
+            g_tree_foreach(net_data->vehicle_data_tree,
+                tl_net_vehicle_data_to_file_traverse, user_data);
+            
+            for(list_foreach=net_data->vehicle_data_file_remove_list;
+                list_foreach!=NULL;list_foreach=g_slist_next(list_foreach))
+            {
+                if(list_foreach->data==NULL)
+                {
+                    continue;
+                }
+                g_tree_remove(net_data->vehicle_data_tree, list_foreach->data);
+            }
+            g_slist_free(net_data->vehicle_data_tree);
+            
+            g_mutex_unlock(&(net_data->vehicle_data_mutex));
+            
+            
+            g_byte_array_unref(net_data->vehicle_data_file_buffer);
+            net_data->vehicle_data_file_buffer = NULL;
+        }
+        else if(tree_len==0)
+        {
+            
+        }
+        
+        g_usleep(1000000);
+    }
+    
+    return NULL;
+}
+
 gboolean tl_net_init(const gchar *vin, const gchar *iccid,
-    const gchar *conf_path, const gchar *fallback_vehicle_server_host,
+    const gchar *conf_path, const gchar *log_path,
+    const gchar *fallback_vehicle_server_host,
     guint16 fallback_vehicle_server_port)
 {    
     if(g_tl_net_data.initialized)
@@ -1378,6 +1475,12 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
         g_free(g_tl_net_data.iccid);
     }
     g_tl_net_data.iccid = g_strdup(iccid);
+    
+    if(g_tl_net_data.log_path!=NULL)
+    {
+        g_free(g_tl_net_data.log_path);
+    }
+    g_tl_net_data.log_path = g_strdup(log_path);
     
     g_tl_net_data.vehicle_connection_retry_maximum = 3;
     g_tl_net_data.vehicle_connection_retry_cycle = 10;
@@ -1437,6 +1540,11 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     
     g_tl_net_data.vehicle_data_report_timer_timeout = g_timeout_add_seconds(1,
         tl_net_vehicle_data_report_timeout, &g_tl_net_data);
+    
+    
+    g_tl_net_data.vehicle_data_log_thread = g_thread_new(
+        "tl-net-vehicle-data-log-thread", tl_net_vehicle_data_log_thread,
+        &g_tl_net_data);
     
     g_tl_net_data.initialized = TRUE;
     
@@ -1509,6 +1617,13 @@ void tl_net_uninit()
         g_tl_net_data.vehicle_packet_read_buffer = NULL;
     }
     
+    if(g_tl_net_data.vehicle_data_log_thread!=NULL)
+    {
+        g_tl_net_data.vehicle_data_log_thread_work_flag = FALSE;
+        g_thread_join(g_tl_net_data.vehicle_data_log_thread);
+        g_tl_net_data.vehicle_data_log_thread = NULL;
+    }
+    
     if(g_tl_net_data.vehicle_write_queue!=NULL)
     {
         g_queue_free_full(g_tl_net_data.vehicle_write_queue,
@@ -1545,6 +1660,11 @@ void tl_net_uninit()
     {
         g_free(g_tl_net_data.vin);
         g_tl_net_data.vin = NULL;
+    }
+    if(g_tl_net_data.log_path!=NULL)
+    {
+        g_free(g_tl_net_data.log_path);
+        g_tl_net_data.log_path = NULL;
     }
     
     g_tl_net_data.initialized = FALSE;

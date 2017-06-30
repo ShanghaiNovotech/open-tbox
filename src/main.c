@@ -41,6 +41,7 @@ int main(int argc, char *argv[])
     GError *error = NULL;
     GOptionContext *context;
     const gchar *conf_file_path;
+    const gchar *log_file_path;
     gchar *parse_file_path;
     
     context = g_option_context_new("- TBox Logger");
@@ -81,7 +82,16 @@ int main(int argc, char *argv[])
         conf_file_path = "/var/lib/tbox/conf";
     }
     
-    if(!tl_logger_init(g_tl_main_cmd_log_storage_path))
+    if(g_tl_main_cmd_log_storage_path!=NULL)
+    {
+        log_file_path = g_tl_main_cmd_log_storage_path;
+    }
+    else
+    {
+        log_file_path = "/var/lib/tbox/log";
+    }
+    
+    if(!tl_logger_init(log_file_path))
     {
         g_error("Cannot initialize logger!");
         return 2;
@@ -100,7 +110,8 @@ int main(int argc, char *argv[])
     }
     
     if(!tl_net_init(g_tl_main_cmd_vin_code, g_tl_main_cmd_iccid_code,
-        g_tl_main_cmd_conf_path, g_tl_main_cmd_fallback_vehicle_server_host,
+        g_tl_main_cmd_conf_path, log_file_path,
+        g_tl_main_cmd_fallback_vehicle_server_host,
         g_tl_main_cmd_fallback_vehicle_server_port))
     {
         g_warning("Cannot initialize net module! Data may not be uploaded.");
