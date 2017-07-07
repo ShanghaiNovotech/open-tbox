@@ -1,4 +1,6 @@
 #include <string.h>
+#include <stdio.h>
+#include <glib/gstdio.h>
 #include <gio/gio.h>
 #include "tl-net.h"
 #include "tl-logger.h"
@@ -6,6 +8,8 @@
 
 #define TL_NET_BACKLOG_MAXIMUM 45
 #define TL_NET_LOG_TO_DISK_TRIGGER 2048
+
+#define TL_NET_PACKET_FILE_HEADER ((const guint8 *)"TLNP")
 
 typedef struct _TLNetData
 {
@@ -41,6 +45,7 @@ typedef struct _TLNetData
     gboolean first_connected;
     
     gint64 realtime_now;
+    gint64 realtime_now2;
     gint64 time_now;
     
     guint vehicle_connection_state;
@@ -74,7 +79,7 @@ typedef struct _TLNetData
     
     guint vehicle_last_alarm_level;
     
-    GByteArray *vehicle_data_file_buffer;
+    GHashTable *vehicle_data_file_buffer_table;
     guint vehicle_data_file_node_count;
     GSList *vehicle_data_file_remove_list;
 }TLNetData;
@@ -161,6 +166,22 @@ static void tl_net_vehicle_packet_build_extreme_data(GByteArray *packet,
 static void tl_net_vehicle_packet_build_alarm_data(GByteArray *packet,
     GHashTable *log_table);
 
+static inline guint16 tl_net_crc16_compute(const guchar *data_p,
+    gsize length)
+{
+    guchar x;
+    guint16 crc = 0xFFFF;
+    while(length--)
+    {
+        x = crc >> 8 ^ *data_p++;
+        x ^= x>>4;
+        crc = (crc << 8) ^ ((guint16)(x << 12)) ^ ((guint16)(x <<5)) ^
+            ((guint16)x);
+    }
+    return crc;
+}
+
+
 static TLNetWriteBufferData *tl_net_write_buffer_data_new(GByteArray *ba)
 {
     TLNetWriteBufferData *data;
@@ -228,7 +249,6 @@ static gboolean tl_net_config_load(TLNetData *net_data,
     {
         net_data->session = 0;
     }
-    
     
     g_key_file_free(keyfile);
     
@@ -562,12 +582,6 @@ static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
                 if(net_data->vehicle_write_request_answer)
                 {
                     wait_request = TRUE;
-                    if(net_data->vehicle_connection_state==
-                        TL_NET_CONNECTION_STATE_LOGINED)
-                    {
-                        net_data->vehicle_connection_state =
-                            TL_NET_CONNECTION_STATE_ANSWER_PENDING;
-                    }
                     net_data->vehicle_connection_request_timestamp =
                         g_get_monotonic_time();
                 }
@@ -715,12 +729,6 @@ static void tl_net_packet_parse(TLNetData *net_data, guint8 command,
                 {
                     g_byte_array_unref(net_data->vehicle_write_buffer);
                     net_data->vehicle_write_buffer = NULL;
-                }
-                if(net_data->vehicle_connection_state==
-                    TL_NET_CONNECTION_STATE_ANSWER_PENDING)
-                {
-                    net_data->vehicle_connection_state =
-                        TL_NET_CONNECTION_STATE_LOGINED;
                 }
                 
                 if(payload_len>=6)
@@ -1041,7 +1049,9 @@ static gboolean tl_net_vehicle_data_traverse(gpointer key, gpointer value,
         return TRUE;
     }
 
-    is_repeat = (*timestamp < net_data->realtime_now);
+    is_repeat = (*timestamp < net_data->realtime_now -
+        (gint64)net_data->vehicle_connection_answer_timeout * G_TIME_SPAN_SECOND);
+    
     packet = tl_net_vehicle_data_packet_build(net_data, is_repeat,
         *timestamp, ba);
     if(packet==NULL)
@@ -1052,7 +1062,7 @@ static gboolean tl_net_vehicle_data_traverse(gpointer key, gpointer value,
     g_debug("Vehicle data packet timestamp %"G_GINT64_FORMAT"\n", *timestamp);
     
     tl_net_vehicle_connection_packet_output_request(net_data,
-        packet, TRUE, is_repeat ? TL_NET_COMMAND_TYPE_REPEAT_DATA :
+        packet, FALSE, is_repeat ? TL_NET_COMMAND_TYPE_REPEAT_DATA :
         TL_NET_COMMAND_TYPE_REALTIME_DATA);
 
     return TRUE;
@@ -1074,45 +1084,6 @@ static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
     
     switch(net_data->vehicle_connection_state)
     {
-        case TL_NET_CONNECTION_STATE_ANSWER_PENDING:
-        {
-            if(now - net_data->vehicle_connection_request_timestamp >=
-                net_data->vehicle_connection_answer_timeout * 1e6)
-            {
-                if(net_data->vehicle_data_retry_count<=
-                    net_data->vehicle_connection_retry_maximum &&
-                    net_data->vehicle_write_buffer_dup!=NULL)
-                {
-                    if(net_data->vehicle_write_buffer!=NULL)
-                    {
-                        g_byte_array_unref(net_data->vehicle_write_buffer);
-                    }
-                    net_data->vehicle_write_buffer = g_byte_array_new();
-                    g_byte_array_append(net_data->vehicle_write_buffer,
-                        net_data->vehicle_write_buffer_dup->data,
-                        net_data->vehicle_write_buffer_dup->len);
-                    net_data->vehicle_data_retry_count++;
-                    net_data->vehicle_connection_request_timestamp = now;
-                    tl_net_connection_continue_write(net_data);
-                }
-                else
-                {
-                    if(net_data->vehicle_write_buffer!=NULL)
-                    {
-                        g_byte_array_unref(net_data->vehicle_write_buffer);
-                        net_data->vehicle_write_buffer = NULL;
-                    }
-                    
-                    net_data->vehicle_connection_retry_count = 0;
-                    net_data->vehicle_write_request_type = 0;
-                    net_data->vehicle_write_request_answer = FALSE;
-                    net_data->vehicle_connection_state =
-                        TL_NET_CONNECTION_STATE_CONNECTED;
-                    tl_net_connection_continue_write(net_data);
-                }
-            }
-            break;
-        }
         case TL_NET_CONNECTION_STATE_LOGINED:
         {
             GDateTime *dt;
@@ -1366,12 +1337,167 @@ static gint tl_net_int64ptr_compare(gconstpointer a, gconstpointer b,
     }
 }
 
+static guint tl_net_vehicle_data_from_file(TLNetData *net_data,
+    const gchar *filepath, guint count, gboolean *remove_file)
+{
+    guint ret = 0;
+    FILE *fp1, *fp2 = NULL;
+    gboolean flag = FALSE;
+    gchar buffer[4096];
+    ssize_t rsize;
+    gchar *tmp_file;
+    guint i;
+    guint expect_length = 0;
+    guint16 expect_crc, crc;
+    guint32 timestamp_high, timestamp_low;
+    gint64 timestamp = 0;
+    GByteArray *parse_buffer;
+    GByteArray *packet;
+    
+    if(filepath==NULL)
+    {
+        return 0;
+    }
+    
+    fp1 = fopen(filepath, "r");
+    if(fp1==NULL)
+    {
+        return 0;
+    }
+    
+    parse_buffer = g_byte_array_new();
+    
+    while(!feof(fp1))
+    {
+        rsize = fread(buffer, 1, 4096, fp1);
+        if(!flag)
+        {
+            for(i=0;i<rsize;i++)
+            {
+                if(parse_buffer->len < 4)
+                {
+                    if(buffer[i]==TL_NET_PACKET_FILE_HEADER[parse_buffer->len])
+                    {
+                        g_byte_array_append(parse_buffer,
+                            (const guint8 *)buffer+i, 1);
+                    }
+                }
+                else if(parse_buffer->len < 18)
+                {
+                    g_byte_array_append(parse_buffer,
+                        (const guint8 *)buffer+i, 1);
+                    if(parse_buffer->len==18)
+                    {
+                        memcpy(&timestamp_high, parse_buffer->data + 4, 4);
+                        memcpy(&timestamp_low, parse_buffer->data + 8, 4);
+                        memcpy(&expect_length, parse_buffer->data + 12, 4);
+                        memcpy(&expect_crc, parse_buffer->data + 16, 2);
+                        
+                        timestamp_high = g_ntohl(timestamp_high);
+                        timestamp_low = g_ntohl(timestamp_low);
+                        expect_length = g_ntohl(expect_length);
+                        expect_crc = g_ntohs(expect_crc);
+                        
+                        if(expect_length==0)
+                        {
+                            g_byte_array_unref(parse_buffer);
+                            parse_buffer = g_byte_array_new();
+                            continue;
+                        }
+                        
+                        timestamp = ((guint64)timestamp_high << 32) |
+                            timestamp_low;
+                    }
+                }
+                else if(parse_buffer->len < 18 + expect_length)
+                {
+                    g_byte_array_append(parse_buffer,
+                        (const guint8 *)buffer+i, 1);
+                        
+                    if(parse_buffer->len == 18 + expect_length)
+                    {
+                        crc = tl_net_crc16_compute(parse_buffer->data + 18,
+                            expect_length);
+                        if(crc==expect_crc)
+                        {
+                            packet = g_byte_array_new();
+                            g_byte_array_append(packet,
+                                parse_buffer->data + 18, expect_length);
+                            
+                            g_mutex_lock(&(net_data->vehicle_data_mutex));
+                            g_tree_insert(net_data->vehicle_data_tree,
+                                g_memdup(&timestamp, sizeof(gint64)), packet);
+                            g_mutex_unlock(&(net_data->vehicle_data_mutex));
+                            
+                            ret++;
+                            
+                            if(ret + count >= TL_NET_LOG_TO_DISK_TRIGGER/2)
+                            {
+                                flag = TRUE;
+                                tmp_file = g_strdup_printf("%s.new",
+                                    filepath);
+                                fp2 = fopen(tmp_file, "w");
+                                
+                                break;
+                            }
+                        }
+                        
+                        g_byte_array_unref(parse_buffer);
+                        parse_buffer = g_byte_array_new();
+                        expect_length = 0;
+                    }
+                }
+            }
+        }
+        else if(fp2!=NULL)
+        {
+            fwrite(buffer, 1, rsize, fp2);
+        }
+        else
+        {
+            break;
+        }
+    }
+    
+    g_byte_array_unref(parse_buffer);
+    
+    fclose(fp1);
+    if(fp2!=NULL)
+    {
+        fclose(fp2);
+        if(tmp_file!=NULL)
+        {
+            g_rename(tmp_file, filepath);
+        }
+    }
+    if(tmp_file!=NULL)
+    {
+        g_free(tmp_file);
+    }
+    
+    if(!flag)
+    {
+        if(remove_file!=NULL)
+        {
+            *remove_file = TRUE;
+        }
+    }
+    
+    return ret;
+}
+
 static gboolean tl_net_vehicle_data_to_file_traverse(gpointer key,
     gpointer value, gpointer user_data)
 {
     TLNetData *net_data = (TLNetData *)user_data;
     gint64 *timestamp = (gint64 *)key;
     GByteArray *packet = (GByteArray *)value;
+    GDateTime *dt;
+    GByteArray *file_buffer;
+    gchar *datestr;
+    guint packet_size;
+    guint16 checksum;
+    guint32 timestamp_high, timestamp_low;
     
     if(user_data==NULL || key==NULL)
     {
@@ -1380,16 +1506,65 @@ static gboolean tl_net_vehicle_data_to_file_traverse(gpointer key,
     
     if(value==NULL)
     {
-        vehicle_data_file_remove_list = g_slist_prepend(
-            vehicle_data_file_remove_list, key);
+        net_data->vehicle_data_file_remove_list = g_slist_prepend(
+            net_data->vehicle_data_file_remove_list, key);
         return FALSE;
     }
     
-    //TODO: Save to file buffer.
-    
-    net_data->vehicle_data_file_node_count++;
-    vehicle_data_file_remove_list = g_slist_prepend(
-        vehicle_data_file_remove_list, key);
+    if(net_data->realtime_now2 - *timestamp <= (gint64)7 * G_TIME_SPAN_DAY)
+    {
+        dt = g_date_time_new_from_unix_local(*timestamp);
+        datestr = g_date_time_format(dt, "%Y%m%d");
+        g_date_time_unref(dt);
+        
+        timestamp_high = (*(const guint64*)timestamp >> 32);
+        timestamp_low = (*(const guint64*)timestamp & 0xFFFFFFFF);
+        
+        timestamp_high = g_htonl(timestamp_high);
+        timestamp_low = g_htonl(timestamp_low);
+        
+        packet_size = g_htonl(packet->len);
+        
+        checksum = tl_net_crc16_compute(packet->data, packet->len);
+        checksum = g_htons(checksum);
+        
+        file_buffer = g_hash_table_lookup(
+            net_data->vehicle_data_file_buffer_table, datestr);
+        if(file_buffer!=NULL)
+        {
+            g_byte_array_append(file_buffer, TL_NET_PACKET_FILE_HEADER, 4);
+            g_byte_array_append(file_buffer, (const guint8 *)
+                &timestamp_high, 4);
+            g_byte_array_append(file_buffer, (const guint8 *)
+                &timestamp_low, 4);
+            g_byte_array_append(file_buffer, (const guint8 *)&packet_size, 4);
+            g_byte_array_append(file_buffer, (const guint8 *)&checksum, 2);
+            g_byte_array_append(file_buffer, packet->data, packet->len);
+            
+            g_free(datestr);
+        }
+        else
+        {
+            file_buffer = g_byte_array_new();
+            
+            g_byte_array_append(file_buffer, TL_NET_PACKET_FILE_HEADER, 4);
+            g_byte_array_append(file_buffer, (const guint8 *)
+                &timestamp_high, 4);
+            g_byte_array_append(file_buffer, (const guint8 *)
+                &timestamp_low, 4);
+            g_byte_array_append(file_buffer, (const guint8 *)&packet_size, 4);
+            g_byte_array_append(file_buffer, (const guint8 *)&checksum, 2);
+            g_byte_array_append(file_buffer, packet->data, packet->len);
+            
+            g_hash_table_replace(net_data->vehicle_data_file_buffer_table,
+                datestr, file_buffer);
+        }
+        
+        net_data->vehicle_data_file_node_count++;
+    }
+
+    net_data->vehicle_data_file_remove_list = g_slist_prepend(
+        net_data->vehicle_data_file_remove_list, key);
     
     return (net_data->vehicle_data_file_node_count >
         TL_NET_LOG_TO_DISK_TRIGGER/2);
@@ -1399,7 +1574,19 @@ static gpointer tl_net_vehicle_data_log_thread(gpointer user_data)
 {
     TLNetData *net_data = (TLNetData *)user_data;
     guint tree_len;
-    GSList *list_foreach;
+    GSList *list_foreach, *file_list;
+    GDateTime *dt;
+    GHashTableIter iter;
+    const gchar *datestr;
+    GByteArray *file_buffer;
+    gchar *filename, *filepath;
+    FILE *fp;
+    int year, month, day;
+    GDir *dir;
+    const gchar *dfname;
+    gint64 timestamp;
+    guint i, ret;
+    gboolean remove_file;
     
     if(user_data==NULL)
     {
@@ -1418,10 +1605,15 @@ static gpointer tl_net_vehicle_data_log_thread(gpointer user_data)
         {
             net_data->vehicle_data_file_remove_list = NULL;
             net_data->vehicle_data_file_node_count = 0;
-            net_data->vehicle_data_file_buffer = g_byte_array_new();
+            net_data->vehicle_data_file_buffer_table = g_hash_table_new_full(
+                g_str_hash, g_str_equal, g_free, (GDestroyNotify)
+                g_byte_array_unref);
+            
+            dt = g_date_time_new_now_local();
+            net_data->realtime_now2 = g_date_time_to_unix(dt);
+            g_date_time_unref(dt);
             
             g_mutex_lock(&(net_data->vehicle_data_mutex));
-            
             g_tree_foreach(net_data->vehicle_data_tree,
                 tl_net_vehicle_data_to_file_traverse, user_data);
             
@@ -1433,18 +1625,146 @@ static gpointer tl_net_vehicle_data_log_thread(gpointer user_data)
                     continue;
                 }
                 g_tree_remove(net_data->vehicle_data_tree, list_foreach->data);
-            }
-            g_slist_free(net_data->vehicle_data_tree);
-            
+            }            
             g_mutex_unlock(&(net_data->vehicle_data_mutex));
+            g_slist_free(net_data->vehicle_data_file_remove_list);
+            net_data->vehicle_data_file_remove_list = NULL;
             
+            g_hash_table_iter_init(&iter,
+                net_data->vehicle_data_file_buffer_table);
+            while(g_hash_table_iter_next(&iter, (gpointer *)&datestr,
+                (gpointer *)&file_buffer))
+            {
+                if(datestr==NULL || file_buffer==NULL)
+                {
+                    continue;
+                }
+                filename = g_strdup_printf("tn-%s.tn", datestr);
+                filepath = g_build_filename(net_data->log_path,
+                    filename, NULL);
+                g_free(filename);
+                
+                fp = fopen(filepath, "a");
+                
+                if(fp!=NULL)
+                {
+                    fwrite(file_buffer->data, 1, file_buffer->len, fp);
+                }
+                
+                fclose(fp);
+                
+                g_free(filepath);
+            }
             
-            g_byte_array_unref(net_data->vehicle_data_file_buffer);
-            net_data->vehicle_data_file_buffer = NULL;
+            g_hash_table_unref(net_data->vehicle_data_file_buffer_table);
+            net_data->vehicle_data_file_buffer_table = NULL;
+            
+            file_list = NULL;
+            dir = g_dir_open(net_data->log_path, 0, NULL);
+            if(dir!=NULL)
+            {
+                while((dfname=g_dir_read_name(dir))!=NULL)
+                {
+                    if(g_str_has_suffix(dfname, ".tn"))
+                    {
+                        year = 0;
+                        month = 1;
+                        day = 1;
+                        sscanf(dfname, "tn-%04d%02d%02d.tn", &year, &month,
+                            &day);
+                        
+                        dt = g_date_time_new_local(year, month, day, 0, 0, 0);
+                        timestamp = g_date_time_to_unix(dt);
+                        g_date_time_unref(dt);
+                        
+                        if(net_data->realtime_now2 - timestamp >=
+                            (gint64)8 * G_TIME_SPAN_DAY)
+                        {
+                            filepath = g_build_filename(net_data->log_path,
+                                dfname, NULL);
+                            file_list = g_slist_prepend(file_list, filepath);
+                        }
+                    }
+                }
+                
+                g_dir_close(dir);
+            }
+                
+            for(list_foreach=file_list;list_foreach!=NULL;
+                list_foreach=g_slist_next(list_foreach))
+            {
+                if(list_foreach->data==NULL)
+                {
+                    continue;
+                }
+                filepath = list_foreach->data;
+                g_remove(filepath);
+            }
+            g_slist_free_full(file_list, g_free);
+            file_list = NULL;
         }
         else if(tree_len==0)
         {
+            file_list = NULL;
+            dir = g_dir_open(net_data->log_path, 0, NULL);
+            i = 0;
+            if(dir!=NULL)
+            {
+                while((dfname=g_dir_read_name(dir))!=NULL &&
+                    i<TL_NET_LOG_TO_DISK_TRIGGER/2)
+                {
+                    if(g_str_has_suffix(dfname, ".tn"))
+                    {
+                        year = 0;
+                        month = 1;
+                        day = 1;
+                        sscanf(dfname, "tn-%04d%02d%02d.tn", &year, &month,
+                            &day);
+                        
+                        dt = g_date_time_new_local(year, month, day, 0, 0, 0);
+                        timestamp = g_date_time_to_unix(dt);
+                        g_date_time_unref(dt);
+                        
+                        if(net_data->realtime_now2 - timestamp <
+                            (gint64)7 * G_TIME_SPAN_DAY)
+                        {
+                            filepath = g_build_filename(net_data->log_path,
+                                dfname, NULL);
+
+                            remove_file = FALSE;
+                            ret = tl_net_vehicle_data_from_file(net_data,
+                                filepath, i, &remove_file);
+                                
+                            i += ret;
+
+                            if(remove_file)
+                            {
+                                file_list = g_slist_prepend(file_list,
+                                    filepath);
+                            }
+                            else
+                            {
+                                g_free(filepath);
+                            }
+                        }
+                    }
+                }
+                
+                g_dir_close(dir);
+            }
             
+            for(list_foreach=file_list;list_foreach!=NULL;
+                list_foreach=g_slist_next(list_foreach))
+            {
+                if(list_foreach->data==NULL)
+                {
+                    continue;
+                }
+                filepath = list_foreach->data;
+                g_remove(filepath);
+            }
+            g_slist_free_full(file_list, g_free);
+            file_list = NULL;
         }
         
         g_usleep(1000000);
