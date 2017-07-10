@@ -14,16 +14,16 @@
   <signal id='0x410' name='VCU09_StOpMode' byteorder='BE' firstbyte='5' firstbit='42' bitlength='3' unit='1' offset='0' source='0' /> 
   <signal id='0x102' name='VCU01_StGear' byteorder='BE' firstbyte='0' firstbit='0' bitlength='2' unit='1' offset='0' source='0' />
   <signal id='0x70' name='BMS02_IsoResistance' byteorder='BE' firstbyte='1' firstbit='14' bitlength='10' unit='10' offset='0' source='0' />
-  <signal id='0x330' name='VCU03_GasNrm' byteorder='BE' firstbyte='3' firstbit='24' bitlength='8' unit='1' offset='0' source='0' />
+  <signal id='0x330' name='VCU03_GasNrm' byteorder='BE' firstbyte='3' firstbit='24' bitlength='8' unit='1' offset='0.5' source='0' />
   <signal id='0x102' name='VCU01_bBrk' byteorder='BE' firstbyte='5' firstbit='45' bitlength='1' unit='1' offset='0' source='0' />
 
   <signal id='0x268' name='VCU08_EMNumber' byteorder='BE' firstbyte='5' firstbit='44' bitlength='2' unit='1' offset='0' source='0' />
   <signal id='0x268' name='VCU08_EMIndex' byteorder='BE' firstbyte='5' firstbit='42' bitlength='2' unit='1' offset='0' listindex='1' source='0' />
   <signal id='0x102' name='VCU01_EMMode' byteorder='BE' firstbyte='6' firstbit='53' bitlength='3' unit='1' offset='0' listparent='VCU08_EMIndex' source='0' />
   <signal id='0x330' name='VCU03_MCUTemp' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='-40' listparent='VCU08_EMIndex' source='0' />
-  <signal id='0x102' name='VCU01_EMSpeed' byteorder='BE' firstbyte='3' firstbit='24' bitlength='16' unit='1' offset='0' listparent='VCU08_EMIndex' source='0' />
+  <signal id='0x102' name='VCU01_EMSpeed' byteorder='BE' firstbyte='3' firstbit='24' bitlength='16' unit='0.5' offset='-16384' listparent='VCU08_EMIndex' source='0' />
   <signal id='0xF8' name='VCU02_EMTrq' byteorder='BE' firstbyte='1' firstbit='14' bitlength='10' unit='1' offset='-512' listparent='VCU08_EMIndex' source='0' />
-  <signal id='0x330' name='VCU03_EMTemp' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='-40' listparent='VCU08_EMIndex' source='0' />
+  <signal id='0x330' name='VCU03_EMTemp' byteorder='BE' firstbyte='1' firstbit='8' bitlength='8' unit='1' offset='-40' listparent='VCU08_EMIndex' source='0' />
   <signal id='0x62' name='VCU05_CapVoltage' byteorder='BE' firstbyte='6' firstbit='52' bitlength='10' unit='0.5' offset='0' listparent='VCU08_EMIndex' source='0' />
   <signal id='0x62' name='VCU05_PTCurrent' byteorder='BE' firstbyte='3' firstbit='28' bitlength='12' unit='0.25' offset='-512' listparent='VCU08_EMIndex' source='0' />
 
