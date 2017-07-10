@@ -28,6 +28,7 @@ typedef struct _TLNetData
     GByteArray *vehicle_write_buffer_dup;
     gboolean vehicle_write_request_answer;
     guint8 vehicle_write_request_type;
+    gint64 vehicle_write_request_timestamp;
     GQueue *vehicle_write_queue;
     GByteArray *vehicle_packet_read_buffer;
     gssize vehicle_packet_read_expect_length;
@@ -82,11 +83,15 @@ typedef struct _TLNetData
     GHashTable *vehicle_data_file_buffer_table;
     guint vehicle_data_file_node_count;
     GSList *vehicle_data_file_remove_list;
+    
+    gint64 vehicle_data_last_timestamp;
+    GHashTable *pending_vehicle_data_timestamp_table;
 }TLNetData;
 
 typedef struct _TLNetWriteBufferData
 {
     GByteArray *buffer;
+    gint64 timestamp;
     gboolean request_answer;
     guint8 request_type;
 }TLNetWriteBufferData;
@@ -549,6 +554,8 @@ static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
                 write_buffer_data->request_answer;
             net_data->vehicle_write_request_type = 
                 write_buffer_data->request_type;
+            net_data->vehicle_write_request_timestamp =
+                write_buffer_data->timestamp;
             tl_net_write_buffer_data_free(write_buffer_data);
             net_data->vehicle_data_retry_count = 0;
             
@@ -589,6 +596,18 @@ static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
                 {
                     g_byte_array_unref(net_data->vehicle_write_buffer);
                     net_data->vehicle_write_buffer = NULL;
+                    
+                    if(net_data->vehicle_write_request_type==
+                        TL_NET_COMMAND_TYPE_REALTIME_DATA || 
+                        net_data->vehicle_write_request_type==
+                        TL_NET_COMMAND_TYPE_REPEAT_DATA)
+                    {
+                        g_mutex_lock(&(net_data->vehicle_data_mutex));
+                        g_tree_remove(net_data->vehicle_data_tree,
+                            &(net_data->vehicle_write_request_timestamp));
+                        net_data->vehicle_write_request_timestamp = 0;
+                        g_mutex_unlock(&(net_data->vehicle_data_mutex));
+                    }
                 }
                 break;
             }
@@ -693,6 +712,7 @@ static void tl_net_packet_parse(TLNetData *net_data, guint8 command,
                 net_data->vehicle_connection_state =
                     TL_NET_CONNECTION_STATE_LOGINED;
                 net_data->vehicle_connection_retry_count = 0;
+                net_data->vehicle_data_last_timestamp = 0;
                 net_data->first_connected = TRUE;
             }
             else if(answer!=TL_NET_ANSWER_TYPE_COMMAND)
@@ -701,71 +721,6 @@ static void tl_net_packet_parse(TLNetData *net_data, guint8 command,
                     TL_NET_CONNECTION_STATE_CONNECTED;
                 net_data->vehicle_connection_login_request_timestamp =
                     g_get_monotonic_time();
-            }
-            break;
-        }
-        case TL_NET_COMMAND_TYPE_REALTIME_DATA:
-        case TL_NET_COMMAND_TYPE_REPEAT_DATA:
-        {
-            guint year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
-            GDateTime *dt;
-            gint64 ts;
-            
-            if(command!=net_data->vehicle_write_request_type)
-            {
-                break;
-            }
-            if(net_data->vehicle_connection_state<
-                TL_NET_CONNECTION_STATE_LOGINED)
-            {
-                break;
-            }
-            
-            if(answer==TL_NET_ANSWER_TYPE_SUCCEED)
-            {
-                net_data->vehicle_write_request_type = 0;
-                net_data->vehicle_write_request_answer = FALSE;
-                if(net_data->vehicle_write_buffer!=NULL)
-                {
-                    g_byte_array_unref(net_data->vehicle_write_buffer);
-                    net_data->vehicle_write_buffer = NULL;
-                }
-                
-                if(payload_len>=6)
-                {
-                    year = payload[0];
-                    month = payload[1];
-                    day = payload[2];
-                    hour = payload[3];
-                    min = payload[4];
-                    sec = payload[5];
-                    
-                    dt = g_date_time_new_local(year+2000, month, day, hour,
-                        min, sec);
-                    ts = g_date_time_to_unix(dt);
-                    g_date_time_unref(dt);
-                    
-                    g_mutex_lock(&(net_data->vehicle_data_mutex));
-                    g_tree_remove(net_data->vehicle_data_tree, &ts);
-                    g_mutex_unlock(&(net_data->vehicle_data_mutex));
-                }
-                
-                tl_net_connection_continue_write(net_data);
-            }
-            else if(answer!=TL_NET_ANSWER_TYPE_COMMAND)
-            {
-                if(net_data->vehicle_write_buffer!=NULL)
-                {
-                    g_byte_array_unref(net_data->vehicle_write_buffer);
-                    net_data->vehicle_write_buffer = NULL;
-                }
-                
-                net_data->vehicle_connection_retry_count = 0;
-                net_data->vehicle_write_request_type = 0;
-                net_data->vehicle_write_request_answer = FALSE;
-                net_data->vehicle_connection_state =
-                    TL_NET_CONNECTION_STATE_CONNECTED;
-                tl_net_connection_continue_write(net_data);
             }
             break;
         }
@@ -919,7 +874,7 @@ static gboolean tl_net_vehicle_connection_input_pollable_source_cb(
 
 static void tl_net_vehicle_connection_packet_output_request(
     TLNetData *net_data, GByteArray *packet, gboolean request_answer,
-    guint8 request_type)
+    guint8 request_type, gint64 timestamp)
 {
     TLNetWriteBufferData *write_buffer_data;
     
@@ -940,6 +895,8 @@ static void tl_net_vehicle_connection_packet_output_request(
     
     write_buffer_data = tl_net_write_buffer_data_new(packet);
     write_buffer_data->request_answer = request_answer;
+    write_buffer_data->request_type = request_type;
+    write_buffer_data->timestamp = timestamp;
     
     g_queue_push_tail(net_data->vehicle_write_queue,
         write_buffer_data);
@@ -1050,7 +1007,8 @@ static gboolean tl_net_vehicle_data_traverse(gpointer key, gpointer value,
     }
 
     is_repeat = (*timestamp < net_data->realtime_now -
-        (gint64)net_data->vehicle_connection_answer_timeout * G_TIME_SPAN_SECOND);
+        (gint64)net_data->vehicle_connection_answer_timeout *
+        G_TIME_SPAN_SECOND);
     
     packet = tl_net_vehicle_data_packet_build(net_data, is_repeat,
         *timestamp, ba);
@@ -1063,7 +1021,7 @@ static gboolean tl_net_vehicle_data_traverse(gpointer key, gpointer value,
     
     tl_net_vehicle_connection_packet_output_request(net_data,
         packet, FALSE, is_repeat ? TL_NET_COMMAND_TYPE_REPEAT_DATA :
-        TL_NET_COMMAND_TYPE_REALTIME_DATA);
+        TL_NET_COMMAND_TYPE_REALTIME_DATA, *timestamp);
 
     return TRUE;
 }
@@ -1088,7 +1046,8 @@ static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
         {
             GDateTime *dt;
             
-            if(g_queue_is_empty(net_data->vehicle_write_queue))
+            if(g_queue_is_empty(net_data->vehicle_write_queue) &&
+                net_data->vehicle_write_buffer==NULL)
             {
                 dt = g_date_time_new_now_local();
                 net_data->realtime_now = g_date_time_to_unix(dt);
@@ -1101,7 +1060,8 @@ static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
                 g_mutex_unlock(&(net_data->vehicle_data_mutex));
             }
             
-            if(g_queue_is_empty(net_data->vehicle_write_queue))
+            if(g_queue_is_empty(net_data->vehicle_write_queue) &&
+                net_data->vehicle_write_buffer==NULL)
             {
                 if(now - net_data->vehicle_connection_heartbeat_timestamp >=
                     (gint64)net_data->vehicle_connection_heartbeat_timeout *
@@ -1109,7 +1069,7 @@ static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
                 {
                     ba = tl_net_heartbeat_packet_build(net_data);
                     tl_net_vehicle_connection_packet_output_request(net_data,
-                        ba, FALSE, TL_NET_COMMAND_TYPE_CLIENT_HEARTBEAT);
+                        ba, FALSE, TL_NET_COMMAND_TYPE_CLIENT_HEARTBEAT, 0);
                     g_byte_array_unref(ba);
                     net_data->vehicle_connection_heartbeat_timestamp = now;
                 }
@@ -1152,7 +1112,7 @@ static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
                 {
                     ba = tl_net_login_packet_build(net_data);
                     tl_net_vehicle_connection_packet_output_request(net_data,
-                        ba, TRUE, TL_NET_COMMAND_TYPE_VEHICLE_LOGIN);
+                        ba, TRUE, TL_NET_COMMAND_TYPE_VEHICLE_LOGIN, 0);
                     g_byte_array_unref(ba);
                     
                     net_data->vehicle_connection_state =
@@ -1997,6 +1957,7 @@ static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     guint16 u16_value;
     guint32 u32_value;
     const TLLoggerLogItemData *item_data;
+    gdouble temp;
     
     u8_value = TL_NET_VEHICLE_DATA_TYPE_TOTAL_DATA;
     g_byte_array_append(packet, &u8_value, 1);
@@ -2082,9 +2043,10 @@ static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     item_data = g_hash_table_lookup(log_table, TL_PARSER_VEHICLE_SPEED);
     if(item_data!=NULL)
     {
-        u16_value = ((gdouble)item_data->value * item_data->unit +
-            item_data->offset) + 1000;
-        u16_value *= 10;
+        temp = (gdouble)item_data->value * item_data->unit +
+            item_data->offset;
+        temp *= 10;
+        u16_value = temp;
         if(u16_value <= 2200)
         {
             u16_value = g_htons(u16_value);
@@ -2124,9 +2086,10 @@ static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     item_data = g_hash_table_lookup(log_table, TL_PARSER_TOTAL_VOLTAGE);
     if(item_data!=NULL)
     {
-        u16_value = (gdouble)item_data->value * item_data->unit +
+        temp = (gdouble)item_data->value * item_data->unit +
             item_data->offset;
-        u16_value *= 10;
+        temp *= 10;
+        u16_value = temp;
         if(u16_value <= 10000)
         {
             u16_value = g_htons(u16_value);
@@ -2145,9 +2108,10 @@ static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     item_data = g_hash_table_lookup(log_table, TL_PARSER_TOTAL_CURRENT);
     if(item_data!=NULL)
     {
-        u16_value = ((gdouble)item_data->value * item_data->unit +
+        temp = ((gdouble)item_data->value * item_data->unit +
             item_data->offset) + 1000;
-        u16_value *= 10;
+        temp *= 10;
+        u16_value = temp;
         if(u16_value <= 20000)
         {
             u16_value = g_htons(u16_value);
@@ -2172,7 +2136,8 @@ static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
         }
         else
         {
-            u8_value = item_data->value;
+            u8_value = (gdouble)item_data->value * item_data->unit +
+                item_data->offset;
         }
     }
     else
@@ -2236,7 +2201,9 @@ static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     item_data = g_hash_table_lookup(log_table, TL_PARSER_INSULATION_RESISTANCE);
     if(item_data!=NULL)
     {
-        u16_value = (gdouble)item_data->value * 10 * item_data->unit;
+        temp = (gdouble)item_data->value * item_data->unit + item_data->offset;
+        temp *= 10;
+        u16_value = temp;
         u16_value = g_htons(u16_value);
     }
     else
