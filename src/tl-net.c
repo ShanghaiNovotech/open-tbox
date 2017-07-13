@@ -172,6 +172,8 @@ static void tl_net_vehicle_packet_build_alarm_data(GByteArray *packet,
     GHashTable *log_table);
 static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
     GByteArray *packet, GHashTable *log_table, guint16 start_frame);
+static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
+    GByteArray *packet, GHashTable *log_table);
 
 static inline guint16 tl_net_crc16_compute(const guchar *data_p,
     gsize length)
@@ -1198,6 +1200,8 @@ static gboolean tl_net_vehicle_data_report_timeout(gpointer user_data)
     {
         battery_frame_count += 200;
     }
+    tl_net_vehicle_packet_build_rechargable_device_temp_data(packet,
+        current_data_table);
     
     g_mutex_lock(&(net_data->vehicle_backlog_data_mutex));
     
@@ -3046,6 +3050,7 @@ static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
     guint16 cell_number;
     const gchar *key, *key2, *index_str;
     guint16 battery_voltage, battery_current;
+    gint64 *raw_value;
     gdouble temp;
     GHashTable *cell_number_table = NULL;
     GHashTable *cell_index_table[3] = {NULL, NULL, NULL};
@@ -3055,7 +3060,7 @@ static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
     gboolean have_more_data = FALSE;
     guint16 values[200];
     guint16 frame_number;
-    guint index, i;
+    guint index, i, j;
 
     u8_value = TL_NET_VEHICLE_DATA_TYPE_RECHARGABLE_DEVICE_VOLTAGE;
     g_byte_array_append(packet, &u8_value, 1);
@@ -3278,74 +3283,77 @@ static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
         
         memset(values, 0, sizeof(guint16) * 200);
         
-        g_hash_table_iter_init(&iter2, cell_index_table[0]);
-        while(g_hash_table_iter_next(&iter2, (gpointer *)&key2, NULL))
+        for(j=0;j<3;j++)
         {
-            index_str = g_strrstr(key2, ":");
-            if(index_str!=NULL)
+            g_hash_table_iter_init(&iter2, cell_index_table[j]);
+            while(g_hash_table_iter_next(&iter2, (gpointer *)&key2, NULL))
             {
-                if(sscanf(index_str, ":%u", &index)<1)
+                index_str = g_strrstr(key2, ":");
+                if(index_str!=NULL)
                 {
-                    continue;
-                }
-            }
-            else
-            {
-                if(sscanf(key2, "%u", &index)<1)
-                {
-                    continue;
-                }
-            }
-            
-            if(index - start_frame >= 200)
-            {
-                continue;
-            }
-            
-            for(i=0;i<3;i++)
-            {
-                item_data = g_hash_table_lookup(cell_g0_voltage_table[i],
-                    key2);
-                if(item_data!=NULL)
-                {
-                    if(index + i < 200)
+                    if(sscanf(index_str, ":%u", &index)<1)
                     {
-                        u16_value = item_data->value;
-                        if(u16_value > 60000)
-                        {
-                            u16_value = 0xFFFE;
-                        }
-                        values[index + i] = g_htons(u16_value);
+                        continue;
+                    }
+                }
+                else
+                {
+                    if(sscanf(key2, "%u", &index)<1)
+                    {
+                        continue;
                     }
                 }
                 
-                item_data = g_hash_table_lookup(cell_g1_voltage_table[i],
-                    key2);
-                if(item_data!=NULL)
+                if(index - start_frame >= 200)
                 {
-                    if(index + i < 200)
-                    {
-                        u16_value = item_data->value;
-                        if(u16_value > 60000)
-                        {
-                            u16_value = 0xFFFE;
-                        }
-                        values[index + i] = g_htons(u16_value);
-                    }
+                    continue;
                 }
                 
-                item_data = g_hash_table_lookup(cell_g2_voltage_table[i],
-                    key2);
-                if(item_data!=NULL)
+                for(i=0;i<3;i++)
                 {
-                    if(index + i < 200)
+                    raw_value = g_hash_table_lookup(cell_g0_voltage_table[i],
+                        key2);
+                    if(raw_value!=NULL)
                     {
-                        u16_value = item_data->value;
-                        if(u16_value > 60000)
+                        if(index + i < 200)
                         {
-                            u16_value = 0xFFFE;
+                            u16_value = *raw_value;
+                            if(u16_value > 60000)
+                            {
+                                u16_value = 0xFFFE;
+                            }
+                            values[index + i] = g_htons(u16_value);
                         }
-                        values[index + i] = g_htons(u16_value);
+                    }
+                    
+                    raw_value = g_hash_table_lookup(cell_g1_voltage_table[i],
+                        key2);
+                    if(raw_value!=NULL)
+                    {
+                        if(index + i < 200)
+                        {
+                            u16_value = *raw_value;
+                            if(u16_value > 60000)
+                            {
+                                u16_value = 0xFFFE;
+                            }
+                            values[index + i] = g_htons(u16_value);
+                        }
+                    }
+                    
+                    raw_value = g_hash_table_lookup(cell_g2_voltage_table[i],
+                        key2);
+                    if(raw_value!=NULL)
+                    {
+                        if(index + i < 200)
+                        {
+                            u16_value = *raw_value;
+                            if(u16_value > 60000)
+                            {
+                                u16_value = 0xFFFE;
+                            }
+                            values[index + i] = g_htons(u16_value);
+                        }
                     }
                 }
             }
@@ -3358,4 +3366,291 @@ static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
     }
     
     return have_more_data;
+}
+
+static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
+    GByteArray *packet, GHashTable *log_table)
+{
+    guint8 u8_value;
+    guint16 u16_value;
+    const TLLoggerLogItemData *item_data;
+    GHashTable *index_table;
+    GHashTableIter iter, iter2;
+    guint table_size;
+    guint16 sensor_number;
+    const gchar *key, *key2, *index_str;
+    gdouble temp;
+    gint64 *raw_value;
+    GHashTable *sensor_number_table = NULL;
+    GHashTable *ts_index_table[3] = {NULL, NULL, NULL};
+    GHashTable *ts_g0_temp_table[4] = {NULL, NULL, NULL, NULL};
+    GHashTable *ts_g1_temp_table[4] = {NULL, NULL, NULL, NULL};
+    GHashTable *ts_g2_temp_table[4] = {NULL, NULL, NULL, NULL};
+    gdouble ts_temp_units[3][4];
+    gint ts_temp_offset[3][4];
+
+    guint8 *values;
+    guint index, i, j;
+
+    u8_value = TL_NET_VEHICLE_DATA_TYPE_RECHARGABLE_DEVICE_TEMPERATURE;
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_TEMPERATURE_SUBSYSTEM_INDEX);
+    if(item_data==NULL || !item_data->list_index ||
+        item_data->index_table==NULL)  
+    {
+        u8_value = 0xFF;
+        g_byte_array_append(packet, &u8_value, 1);
+        return;
+    }
+    index_table = item_data->index_table;
+    
+    table_size = g_hash_table_size(index_table);
+    
+    if(table_size>250)
+    {
+        table_size = 250;
+    }
+    if(table_size==0)
+    {
+        u8_value = 0xFF;
+        g_byte_array_append(packet, &u8_value, 1);
+        return;
+    }
+    u8_value = table_size;
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_TEMPERATURE_SENSOR_NUMBER);
+    if(item_data!=NULL)
+    {
+        sensor_number_table = item_data->list_table;
+    }
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G0_TS_START_ID);
+    if(item_data!=NULL)
+    {
+        ts_index_table[0] = item_data->index_table;
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G1_TS_START_ID);
+    if(item_data!=NULL)
+    {
+        ts_index_table[1] = item_data->index_table;
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G2_TS_START_ID);
+    if(item_data!=NULL)
+    {
+        ts_index_table[2] = item_data->index_table;
+    }
+    
+    for(j=0;j<3;j++)
+    {
+        for(i=0;i<4;i++)
+        {
+            ts_temp_units[j][i] = 1.0;
+            ts_temp_offset[j][i] = 0;
+        }
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G0_TS_P0_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g0_temp_table[0] = item_data->list_table;
+        ts_temp_units[0][0] = item_data->unit;
+        ts_temp_offset[0][0] = item_data->offset;
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G0_TS_P1_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g0_temp_table[1] = item_data->list_table;
+        ts_temp_units[0][1] = item_data->unit;
+        ts_temp_offset[0][1] = item_data->offset;
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G0_TS_P2_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g0_temp_table[2] = item_data->list_table;
+        ts_temp_units[0][2] = item_data->unit;
+        ts_temp_offset[0][2] = item_data->offset;
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G0_TS_P3_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g0_temp_table[3] = item_data->list_table;
+        ts_temp_units[0][3] = item_data->unit;
+        ts_temp_offset[0][3] = item_data->offset;
+    }
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G1_TS_P0_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g1_temp_table[0] = item_data->list_table;
+        ts_temp_units[1][0] = item_data->unit;
+        ts_temp_offset[1][0] = item_data->offset;
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G1_TS_P1_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g1_temp_table[1] = item_data->list_table;
+        ts_temp_units[1][1] = item_data->unit;
+        ts_temp_offset[1][1] = item_data->offset;
+
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G1_TS_P2_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g1_temp_table[2] = item_data->list_table;
+        ts_temp_units[1][2] = item_data->unit;
+        ts_temp_offset[1][2] = item_data->offset;
+
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G1_TS_P3_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g1_temp_table[3] = item_data->list_table;
+        ts_temp_units[1][3] = item_data->unit;
+        ts_temp_offset[1][3] = item_data->offset;
+
+    }
+    
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G2_TS_P0_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g2_temp_table[0] = item_data->list_table;
+        ts_temp_units[2][0] = item_data->unit;
+        ts_temp_offset[2][0] = item_data->offset;
+
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G2_TS_P1_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g2_temp_table[1] = item_data->list_table;
+        ts_temp_units[2][1] = item_data->unit;
+        ts_temp_offset[2][1] = item_data->offset;
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G2_TS_P2_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g2_temp_table[2] = item_data->list_table;
+        ts_temp_units[2][2] = item_data->unit;
+        ts_temp_offset[2][2] = item_data->offset;
+    }
+    item_data = g_hash_table_lookup(log_table,
+        TL_PARSER_BATTERY_G2_TS_P3_VALUE);
+    if(item_data!=NULL)
+    {
+        ts_g2_temp_table[3] = item_data->list_table;
+        ts_temp_units[2][3] = item_data->unit;
+        ts_temp_offset[2][3] = item_data->offset;
+    }
+
+    g_hash_table_iter_init(&iter, index_table);
+    while(g_hash_table_iter_next(&iter, (gpointer *)&key, NULL))
+    {
+        sensor_number = 0;
+        if(sensor_number_table!=NULL)
+        {
+            item_data = g_hash_table_lookup(sensor_number_table, key);
+            if(item_data!=NULL)
+            {
+                sensor_number = item_data->value;
+            }
+        }
+        
+        u16_value = g_htons(sensor_number);
+        g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+
+        values = g_new0(guint8, sensor_number);
+        
+        for(j=0;j<3;j++)
+        {
+            g_hash_table_iter_init(&iter2, ts_index_table[j]);
+            while(g_hash_table_iter_next(&iter2, (gpointer *)&key2, NULL))
+            {
+                index_str = g_strrstr(key2, ":");
+                if(index_str!=NULL)
+                {
+                    if(sscanf(index_str, ":%u", &index)<1)
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    if(sscanf(key2, "%u", &index)<1)
+                    {
+                        continue;
+                    }
+                }
+
+                if(index>=sensor_number)
+                {
+                    continue;
+                }
+                
+                for(i=0;i<3;i++)
+                {
+                    raw_value = g_hash_table_lookup(ts_g0_temp_table[i],
+                        key2);
+                    if(raw_value!=NULL)
+                    {
+                        temp = (gdouble)(*raw_value) * ts_temp_units[j][i] +
+                            ts_temp_offset[j][i];
+                        temp += 40;
+                        if(index+i < sensor_number)
+                        {
+                            values[index + i] = temp;
+                        }
+                    }
+                    
+                    raw_value = g_hash_table_lookup(ts_g1_temp_table[i],
+                        key2);
+                    if(raw_value!=NULL)
+                    {
+                        temp = (gdouble)(*raw_value) * ts_temp_units[j][i] +
+                            ts_temp_offset[j][i];
+                        temp += 40;
+                        if(index+i < sensor_number)
+                        {
+                            values[index + i] = temp;
+                        }
+                    }
+                    
+                    raw_value = g_hash_table_lookup(ts_g2_temp_table[i],
+                        key2);
+                    if(raw_value!=NULL)
+                    {
+                        temp = (gdouble)(*raw_value) * ts_temp_units[j][i] +
+                            ts_temp_offset[j][i];
+                        temp += 40;
+                        if(index+i < sensor_number)
+                        {
+                            values[index + i] = temp;
+                        }
+                    }
+                }
+            }
+        }
+        
+        for(i=0;i<sensor_number;i++)
+        {
+            g_byte_array_append(packet, values + i, 1);
+        }
+
+        g_free(values);
+    }
 }
