@@ -13,6 +13,7 @@ typedef struct _TLLoggerLogItemData
     gint8 source;
     gboolean list_index;
     gchar *list_parent;
+    GHashTable *index_table;
     GHashTable *list_table;
 }TLLoggerLogItemData;
 

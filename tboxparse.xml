@@ -58,6 +58,47 @@
   <signal id='0x102' name='VCU01_bEMOverTemp' byteorder='BE' firstbyte='1' firstbit='13' bitlength='1' unit='1' offset='0' source='0' />
   <signal id='0x70' name='BMS02_FaultSOCHigh' byteorder='BE' firstbyte='5' firstbit='44' bitlength='1' unit='1' offset='0' source='0' />
 
+  <signal id='0x430' name='BMS08_BatSubSystemVoltageIndex' byteorder='BE' firstbyte='0' firstbit='4' bitlength='2' unit='1' offset='0' source='0' />
+  <signal id='0x430' name='BMS08_CellNumber' byteorder='BE' firstbyte='2' firstbit='16' bitlength='8' unit='1' offset='0' listparent='BMS08_BatSubSystemVoltageIndex' source='0' />
+
+  <signal id='0x100' name='CSC00_StartCellID' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='0' listparent='BMS08_BatSubSystemVoltageIndex' listindex='1' source='0' />
+  <signal id='0x100' name='CSC00_StartCellIdPlus0Voltage' byteorder='BE' firstbyte='1' firstbit='8' bitlength='14' unit='0.305' offset='0' listparent='CSC00_StartCellID' source='0' />
+  <signal id='0x100' name='CSC00_StartCellIdPlus1Voltage' byteorder='BE' firstbyte='2' firstbit='22' bitlength='14' unit='0.305' offset='0' listparent='CSC00_StartCellID' source='0' />
+  <signal id='0x100' name='CSC00_StartCellIdPlus2Voltage' byteorder='BE' firstbyte='4' firstbit='36' bitlength='14' unit='0.305' offset='0' listparent='CSC00_StartCellID' source='0' />
+  <signal id='0x100' name='CSC00_StartCellIdPlus3Voltage' byteorder='BE' firstbyte='6' firstbit='50' bitlength='14' unit='0.305' offset='0' listparent='CSC00_StartCellID' source='0' />
+
+  <signal id='0x101' name='CSC01_StartCellID' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='0' listparent='BMS08_BatSubSystemVoltageIndex' listindex='1' source='0' />
+  <signal id='0x101' name='CSC01_StartCellIdPlus0Voltage' byteorder='BE' firstbyte='1' firstbit='8' bitlength='14' unit='0.305' offset='0' listparent='CSC01_StartCellID' source='0' />
+  <signal id='0x101' name='CSC01_StartCellIdPlus1Voltage' byteorder='BE' firstbyte='2' firstbit='22' bitlength='14' unit='0.305' offset='0' listparent='CSC01_StartCellID' source='0' />
+  <signal id='0x101' name='CSC01_StartCellIdPlus2Voltage' byteorder='BE' firstbyte='4' firstbit='36' bitlength='14' unit='0.305' offset='0' listparent='CSC01_StartCellID' source='0' />
+  <signal id='0x101' name='CSC01_StartCellIdPlus3Voltage' byteorder='BE' firstbyte='6' firstbit='50' bitlength='14' unit='0.305' offset='0' listparent='CSC01_StartCellID' source='0' />
+
+  <signal id='0x102' name='CSC02_StartCellID' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='0' listparent='BMS08_BatSubSystemVoltageIndex' listindex='1' source='0' />
+  <signal id='0x102' name='CSC02_StartCellIdPlus0Voltage' byteorder='BE' firstbyte='1' firstbit='8' bitlength='14' unit='0.305' offset='0' listparent='CSC02_StartCellID' source='0' />
+  <signal id='0x102' name='CSC02_StartCellIdPlus1Voltage' byteorder='BE' firstbyte='2' firstbit='22' bitlength='14' unit='0.305' offset='0' listparent='CSC02_StartCellID' source='0' />
+  <signal id='0x102' name='CSC02_StartCellIdPlus2Voltage' byteorder='BE' firstbyte='4' firstbit='36' bitlength='14' unit='0.305' offset='0' listparent='CSC02_StartCellID' source='0' />
+  <signal id='0x102' name='CSC02_StartCellIdPlus3Voltage' byteorder='BE' firstbyte='6' firstbit='50' bitlength='14' unit='0.305' offset='0' listparent='CSC02_StartCellID' source='0' />
+
+  <signal id='0x430' name='BMS08_BatSubSystemTempIndex' byteorder='BE' firstbyte='0' firstbit='4' bitlength='2' unit='1' offset='0' source='0' />
+  <signal id='0x430' name='BMS08_TSensorNumber' byteorder='BE' firstbyte='0' firstbit='0' bitlength='4' unit='1' offset='0' listparent='BMS08_BatSubSystemTempIndex' source='0' />
+
+  <signal id='0x200' name='CSC00_TempStartId' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='0' listparent='BMS08_BatSubSystemTempIndex' listindex='1' source='0' />
+  <signal id='0x200' name='CSC00_TempStartIdPlus0' byteorder='BE' firstbyte='1' firstbit='8' bitlength='14' unit='1' offset='-40' listparent='CSC00_TempStartId' source='0' />
+  <signal id='0x200' name='CSC00_TempStartIdPlus1' byteorder='BE' firstbyte='2' firstbit='22' bitlength='14' unit='1' offset='-40' listparent='CSC00_TempStartId' source='0' />
+  <signal id='0x200' name='CSC00_TempStartIdPlus2' byteorder='BE' firstbyte='4' firstbit='36' bitlength='14' unit='1' offset='-40' listparent='CSC00_TempStartId' source='0' />
+  <signal id='0x200' name='CSC00_TempStartIdPlus3' byteorder='BE' firstbyte='6' firstbit='50' bitlength='14' unit='1' offset='-40' listparent='CSC00_TempStartId' source='0' />
+
+  <signal id='0x201' name='CSC01_TempStartId' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='0' listparent='BMS08_BatSubSystemTempIndex' listindex='1' source='0' />
+  <signal id='0x201' name='CSC01_TempStartIdPlus0' byteorder='BE' firstbyte='1' firstbit='8' bitlength='14' unit='1' offset='-40' listparent='CSC01_TempStartId' source='0' />
+  <signal id='0x201' name='CSC01_TempStartIdPlus1' byteorder='BE' firstbyte='2' firstbit='22' bitlength='14' unit='1' offset='-40' listparent='CSC01_TempStartId' source='0' />
+  <signal id='0x201' name='CSC01_TempStartIdPlus2' byteorder='BE' firstbyte='4' firstbit='36' bitlength='14' unit='1' offset='-40' listparent='CSC01_TempStartId' source='0' />
+  <signal id='0x201' name='CSC01_TempStartIdPlus3' byteorder='BE' firstbyte='6' firstbit='50' bitlength='14' unit='1' offset='-40' listparent='CSC01_TempStartId' source='0' />
+
+  <signal id='0x202' name='CSC02_TempStartId' byteorder='BE' firstbyte='0' firstbit='0' bitlength='8' unit='1' offset='0' listparent='BMS08_BatSubSystemTempIndex' listindex='1' source='0' />
+  <signal id='0x202' name='CSC02_TempStartIdPlus0' byteorder='BE' firstbyte='1' firstbit='8' bitlength='14' unit='1' offset='-40' listparent='CSC02_TempStartId' source='0' />
+  <signal id='0x202' name='CSC02_TempStartIdPlus1' byteorder='BE' firstbyte='2' firstbit='22' bitlength='14' unit='1' offset='-40' listparent='CSC02_TempStartId' source='0' />
+  <signal id='0x202' name='CSC02_TempStartIdPlus2' byteorder='BE' firstbyte='4' firstbit='36' bitlength='14' unit='1' offset='-40' listparent='CSC02_TempStartId' source='0' />
+  <signal id='0x202' name='CSC02_TempStartIdPlus3' byteorder='BE' firstbyte='6' firstbit='50' bitlength='14' unit='1' offset='-40' listparent='CSC02_TempStartId' source='0' />
 </tbox>
 
 <template>
