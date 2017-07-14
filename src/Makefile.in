@@ -89,8 +89,9 @@ PRE_UNINSTALL = :
 POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
-bin_PROGRAMS = tbox-logger$(EXEEXT)
+bin_PROGRAMS = tbox-logger$(EXEEXT) iccid-fetch$(EXEEXT)
 @DEBUG_MODE_TRUE@am__append_1 = -DDEBUG_MODE=1 -g
+@DEBUG_MODE_TRUE@am__append_2 = -DDEBUG_MODE=1 -g
 subdir = src
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/libtool.m4 \
@@ -107,15 +108,20 @@ CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
+am_iccid_fetch_OBJECTS = iccid_fetch-iccid-fetch.$(OBJEXT)
+iccid_fetch_OBJECTS = $(am_iccid_fetch_OBJECTS)
+AM_V_lt = $(am__v_lt_@AM_V@)
+am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
+am__v_lt_0 = --silent
+am__v_lt_1 = 
+iccid_fetch_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
+	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(iccid_fetch_CFLAGS) \
+	$(CFLAGS) $(iccid_fetch_LDFLAGS) $(LDFLAGS) -o $@
 am_tbox_logger_OBJECTS = tbox_logger-main.$(OBJEXT) \
 	tbox_logger-tl-canbus.$(OBJEXT) tbox_logger-tl-net.$(OBJEXT) \
 	tbox_logger-tl-logger.$(OBJEXT) \
 	tbox_logger-tl-parser.$(OBJEXT)
 tbox_logger_OBJECTS = $(am_tbox_logger_OBJECTS)
-AM_V_lt = $(am__v_lt_@AM_V@)
-am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
-am__v_lt_0 = --silent
-am__v_lt_1 = 
 tbox_logger_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(tbox_logger_CFLAGS) \
 	$(CFLAGS) $(tbox_logger_LDFLAGS) $(LDFLAGS) -o $@
@@ -153,8 +159,8 @@ AM_V_CCLD = $(am__v_CCLD_@AM_V@)
 am__v_CCLD_ = $(am__v_CCLD_@AM_DEFAULT_V@)
 am__v_CCLD_0 = @echo "  CCLD    " $@;
 am__v_CCLD_1 = 
-SOURCES = $(tbox_logger_SOURCES)
-DIST_SOURCES = $(tbox_logger_SOURCES)
+SOURCES = $(iccid_fetch_SOURCES) $(tbox_logger_SOURCES)
+DIST_SOURCES = $(iccid_fetch_SOURCES) $(tbox_logger_SOURCES)
 am__can_run_installinfo = \
   case $$AM_UPDATE_INFO_DIR in \
     n|no|NO) false;; \
@@ -320,6 +326,14 @@ tbox_logger_LDFLAGS = -export-dynamic -no-undefined \
     -export-symbols-regex "^[[^_]].*"
 
 tbox_logger_LDADD = @LIBOBJS@ @GLIB2_LIBS@ @JSONC_LIBS@
+iccid_fetch_CFLAGS = @GLIB2_CFLAGS@ -DPREFIXDIR=\"$(prefix)\" \
+	$(am__append_2)
+iccid_fetch_DEPENDENCIES = @LIBOBJS@
+iccid_fetch_SOURCES = iccid-fetch.c
+iccid_fetch_LDFLAGS = -export-dynamic -no-undefined \
+    -export-symbols-regex "^[[^_]].*"
+
+iccid_fetch_LDADD = @LIBOBJS@ @GLIB2_LIBS@
 all: all-am
 
 .SUFFIXES:
@@ -403,6 +417,10 @@ clean-binPROGRAMS:
 	echo " rm -f" $$list; \
 	rm -f $$list
 
+iccid-fetch$(EXEEXT): $(iccid_fetch_OBJECTS) $(iccid_fetch_DEPENDENCIES) $(EXTRA_iccid_fetch_DEPENDENCIES) 
+	@rm -f iccid-fetch$(EXEEXT)
+	$(AM_V_CCLD)$(iccid_fetch_LINK) $(iccid_fetch_OBJECTS) $(iccid_fetch_LDADD) $(LIBS)
+
 tbox-logger$(EXEEXT): $(tbox_logger_OBJECTS) $(tbox_logger_DEPENDENCIES) $(EXTRA_tbox_logger_DEPENDENCIES) 
 	@rm -f tbox-logger$(EXEEXT)
 	$(AM_V_CCLD)$(tbox_logger_LINK) $(tbox_logger_OBJECTS) $(tbox_logger_LDADD) $(LIBS)
@@ -413,6 +431,7 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/iccid_fetch-iccid-fetch.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tbox_logger-main.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tbox_logger-tl-canbus.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tbox_logger-tl-logger.Po@am__quote@
@@ -439,6 +458,20 @@ distclean-compile:
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LTCOMPILE) -c -o $@ $<
+
+iccid_fetch-iccid-fetch.o: iccid-fetch.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(iccid_fetch_CFLAGS) $(CFLAGS) -MT iccid_fetch-iccid-fetch.o -MD -MP -MF $(DEPDIR)/iccid_fetch-iccid-fetch.Tpo -c -o iccid_fetch-iccid-fetch.o `test -f 'iccid-fetch.c' || echo '$(srcdir)/'`iccid-fetch.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/iccid_fetch-iccid-fetch.Tpo $(DEPDIR)/iccid_fetch-iccid-fetch.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='iccid-fetch.c' object='iccid_fetch-iccid-fetch.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(iccid_fetch_CFLAGS) $(CFLAGS) -c -o iccid_fetch-iccid-fetch.o `test -f 'iccid-fetch.c' || echo '$(srcdir)/'`iccid-fetch.c
+
+iccid_fetch-iccid-fetch.obj: iccid-fetch.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(iccid_fetch_CFLAGS) $(CFLAGS) -MT iccid_fetch-iccid-fetch.obj -MD -MP -MF $(DEPDIR)/iccid_fetch-iccid-fetch.Tpo -c -o iccid_fetch-iccid-fetch.obj `if test -f 'iccid-fetch.c'; then $(CYGPATH_W) 'iccid-fetch.c'; else $(CYGPATH_W) '$(srcdir)/iccid-fetch.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/iccid_fetch-iccid-fetch.Tpo $(DEPDIR)/iccid_fetch-iccid-fetch.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='iccid-fetch.c' object='iccid_fetch-iccid-fetch.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(iccid_fetch_CFLAGS) $(CFLAGS) -c -o iccid_fetch-iccid-fetch.obj `if test -f 'iccid-fetch.c'; then $(CYGPATH_W) 'iccid-fetch.c'; else $(CYGPATH_W) '$(srcdir)/iccid-fetch.c'; fi`
 
 tbox_logger-main.o: main.c
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(tbox_logger_CFLAGS) $(CFLAGS) -MT tbox_logger-main.o -MD -MP -MF $(DEPDIR)/tbox_logger-main.Tpo -c -o tbox_logger-main.o `test -f 'main.c' || echo '$(srcdir)/'`main.c
