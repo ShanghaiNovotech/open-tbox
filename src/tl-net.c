@@ -730,6 +730,7 @@ static void tl_net_packet_parse(TLNetData *net_data, guint8 command,
         }
         default:
         {
+            g_message("Got unknown command type %u.", command);
             break;
         }
     }
@@ -3060,6 +3061,7 @@ static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
     gboolean have_more_data = FALSE;
     guint16 values[200];
     guint16 frame_number;
+    guint subsys_id;
     guint index, i, j;
 
     u8_value = TL_NET_VEHICLE_DATA_TYPE_RECHARGABLE_DEVICE_VOLTAGE;
@@ -3237,16 +3239,24 @@ static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
     g_hash_table_iter_init(&iter, index_table);
     while(g_hash_table_iter_next(&iter, (gpointer *)&key, NULL))
     {
+        if(key==NULL)
+        {
+            continue;
+        }
+        sscanf(key, "%u", &subsys_id);
+        u8_value = subsys_id + 1;
+        g_byte_array_append(packet, &u8_value, 1);
+        
         g_byte_array_append(packet, (const guint8 *)&battery_voltage, 2);
         g_byte_array_append(packet, (const guint8 *)&battery_current, 2);
         
         cell_number = 0;
         if(cell_number_table!=NULL)
         {
-            item_data = g_hash_table_lookup(cell_number_table, key);
-            if(item_data!=NULL)
+            raw_value = g_hash_table_lookup(cell_number_table, key);
+            if(raw_value!=NULL)
             {
-                cell_number = item_data->value;
+                cell_number = *raw_value;
             }
         }
         
@@ -3285,6 +3295,10 @@ static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
         
         for(j=0;j<3;j++)
         {
+            if(cell_index_table[j]==NULL)
+            {
+                continue;
+            }
             g_hash_table_iter_init(&iter2, cell_index_table[j]);
             while(g_hash_table_iter_next(&iter2, (gpointer *)&key2, NULL))
             {
@@ -3311,8 +3325,12 @@ static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
                 
                 for(i=0;i<3;i++)
                 {
-                    raw_value = g_hash_table_lookup(cell_g0_voltage_table[i],
-                        key2);
+                    raw_value = NULL;
+                    if(cell_g0_voltage_table[i]!=NULL)
+                    {
+                        raw_value = g_hash_table_lookup(
+                            cell_g0_voltage_table[i], key2);
+                    }
                     if(raw_value!=NULL)
                     {
                         if(index + i < 200)
@@ -3326,8 +3344,12 @@ static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
                         }
                     }
                     
-                    raw_value = g_hash_table_lookup(cell_g1_voltage_table[i],
-                        key2);
+                    raw_value = NULL;
+                    if(cell_g1_voltage_table[i]!=NULL)
+                    {
+                        raw_value = g_hash_table_lookup(
+                            cell_g1_voltage_table[i], key2);
+                    }
                     if(raw_value!=NULL)
                     {
                         if(index + i < 200)
@@ -3341,8 +3363,12 @@ static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
                         }
                     }
                     
-                    raw_value = g_hash_table_lookup(cell_g2_voltage_table[i],
-                        key2);
+                    raw_value = NULL;
+                    if(cell_g2_voltage_table[i]!=NULL)
+                    {
+                        raw_value = g_hash_table_lookup(
+                            cell_g2_voltage_table[i], key2);
+                    }
                     if(raw_value!=NULL)
                     {
                         if(index + i < 200)
@@ -3388,6 +3414,7 @@ static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
     GHashTable *ts_g2_temp_table[4] = {NULL, NULL, NULL, NULL};
     gdouble ts_temp_units[3][4];
     gint ts_temp_offset[3][4];
+    guint subsys_id;
 
     guint8 *values;
     guint index, i, j;
@@ -3561,13 +3588,21 @@ static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
     g_hash_table_iter_init(&iter, index_table);
     while(g_hash_table_iter_next(&iter, (gpointer *)&key, NULL))
     {
+        if(key==NULL)
+        {
+            continue;
+        }
+        sscanf(key, "%u", &subsys_id);
+        u8_value = subsys_id + 1;
+        g_byte_array_append(packet, &u8_value, 1);
+        
         sensor_number = 0;
         if(sensor_number_table!=NULL)
         {
-            item_data = g_hash_table_lookup(sensor_number_table, key);
-            if(item_data!=NULL)
+            raw_value = g_hash_table_lookup(sensor_number_table, key);
+            if(raw_value!=NULL)
             {
-                sensor_number = item_data->value;
+                sensor_number = *raw_value;
             }
         }
         
@@ -3578,6 +3613,10 @@ static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
         
         for(j=0;j<3;j++)
         {
+            if(ts_index_table[j]==NULL)
+            {
+                continue;
+            }
             g_hash_table_iter_init(&iter2, ts_index_table[j]);
             while(g_hash_table_iter_next(&iter2, (gpointer *)&key2, NULL))
             {
@@ -3604,8 +3643,12 @@ static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
                 
                 for(i=0;i<3;i++)
                 {
-                    raw_value = g_hash_table_lookup(ts_g0_temp_table[i],
-                        key2);
+                    raw_value = NULL;
+                    if(ts_g0_temp_table[i]!=NULL)
+                    {
+                        raw_value = g_hash_table_lookup(ts_g0_temp_table[i],
+                            key2);
+                    }
                     if(raw_value!=NULL)
                     {
                         temp = (gdouble)(*raw_value) * ts_temp_units[j][i] +
@@ -3617,8 +3660,12 @@ static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
                         }
                     }
                     
-                    raw_value = g_hash_table_lookup(ts_g1_temp_table[i],
-                        key2);
+                    raw_value = NULL;
+                    if(ts_g1_temp_table[i]!=NULL)
+                    {
+                        raw_value = g_hash_table_lookup(ts_g1_temp_table[i],
+                            key2);
+                    }
                     if(raw_value!=NULL)
                     {
                         temp = (gdouble)(*raw_value) * ts_temp_units[j][i] +
@@ -3630,8 +3677,12 @@ static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
                         }
                     }
                     
-                    raw_value = g_hash_table_lookup(ts_g2_temp_table[i],
-                        key2);
+                    raw_value = NULL;
+                    if(ts_g2_temp_table[i]!=NULL)
+                    {
+                        raw_value = g_hash_table_lookup(ts_g2_temp_table[i],
+                            key2);
+                    }
                     if(raw_value!=NULL)
                     {
                         temp = (gdouble)(*raw_value) * ts_temp_units[j][i] +

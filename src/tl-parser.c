@@ -94,7 +94,7 @@ static void tl_parser_markup_parser_start_element(GMarkupParseContext *context,
                     {
                         parser_data->use_ext_id = TRUE;
                     }
-                    g_debug("Parsed CAN-Bus ID %d\n", signal_data->id);
+                    g_debug("Parsed CAN-Bus ID %d", signal_data->id);
                 }
             }
             else if(g_strcmp0(attribute_names[i], "name")==0)
@@ -444,7 +444,9 @@ gboolean tl_parser_parse_can_data(const gchar *device,
         
         value = (gint64)rvalue;
         
+        /*
         g_debug("Got %s value %"G_GUINT64_FORMAT".", signal_data->name, value);
+        */
         
         item_data.name = signal_data->name;
         item_data.value = value;

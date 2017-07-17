@@ -5,7 +5,8 @@ configure
 /Makefile
 src/.deps
 /src/Makefile
-/src/luna-vss
+/src/iccid-fetch
+/src/tbox-logger
 /stamp-h1
 /ffmpeg/config.log
 /ffmpeg/config.mak

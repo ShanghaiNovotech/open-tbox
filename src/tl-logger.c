@@ -1463,6 +1463,11 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
             
             if(item_data->list_parent!=NULL && pindex->len > 0)
             {
+                if(idata->list_table==NULL)
+                {
+                    idata->list_table = g_hash_table_new_full(g_str_hash,
+                        g_str_equal, g_free, g_free);
+                }
                 g_hash_table_replace(idata->list_table,
                     g_strdup(pindex->str), g_memdup(&(item_data->value),
                     sizeof(gint64)));
@@ -1479,6 +1484,12 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
                 {
                     g_snprintf(svalue, 15, "%u:", (guint)item_data->value);
                     g_string_prepend(pindex, svalue);
+                }
+                
+                if(idata->index_table==NULL)
+                {
+                    idata->index_table = g_hash_table_new_full(g_str_hash,
+                        g_str_equal, g_free, NULL);
                 }
                 
                 g_hash_table_add(idata->index_table, g_strdup(pindex->str));

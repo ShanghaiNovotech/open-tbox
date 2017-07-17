@@ -5,6 +5,7 @@
 #include "tl-canbus.h"
 #include "tl-net.h"
 #include "tl-parser.h"
+#include "tl-gps.h"
 
 static GMainLoop *g_tl_main_loop = NULL;
 static gboolean g_tl_main_cmd_daemon = FALSE;
@@ -109,6 +110,11 @@ int main(int argc, char *argv[])
         return 4;
     }
     
+    if(!tl_gps_init())
+    {
+        g_warning("Cannot initialize GPS!");
+    }
+    
     if(!tl_net_init(g_tl_main_cmd_vin_code, g_tl_main_cmd_iccid_code,
         g_tl_main_cmd_conf_path, log_file_path,
         g_tl_main_cmd_fallback_vehicle_server_host,
@@ -125,6 +131,7 @@ int main(int argc, char *argv[])
     g_main_loop_unref(g_tl_main_loop);
     
     tl_net_uninit();
+    tl_gps_uninit();
     tl_canbus_uninit();
     tl_parser_uninit();
     tl_logger_uninit();
