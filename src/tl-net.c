@@ -179,6 +179,9 @@ static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
     GByteArray *packet, GHashTable *log_table);
 static void tl_net_vehicle_packet_build_vehicle_position_data(
     GByteArray *packet, GHashTable *log_table);
+    
+static void tl_net_command_vehicle_data_query(TLNetData *net_data,
+    const guint8 *payload, guint payload_len);
 
 static inline guint16 tl_net_crc16_compute(const guchar *data_p,
     gsize length)
@@ -735,6 +738,15 @@ static void tl_net_packet_parse(TLNetData *net_data, guint8 command,
                     TL_NET_CONNECTION_STATE_CONNECTED;
                 net_data->vehicle_connection_login_request_timestamp =
                     g_get_monotonic_time();
+            }
+            break;
+        }
+        case TL_NET_COMMAND_TYPE_QUERY:
+        {
+            if(answer==TL_NET_ANSWER_TYPE_COMMAND)
+            {
+                tl_net_command_vehicle_data_query(net_data, payload,
+                    payload_len);
             }
             break;
         }
@@ -3752,4 +3764,307 @@ static void tl_net_vehicle_packet_build_vehicle_position_data(
     
     u32_value = g_htonl(latitude);
     g_byte_array_append(packet, (const guint8 *)&u32_value, 4);
+}
+
+static void tl_net_command_vehicle_data_query(TLNetData *net_data,
+    const guint8 *payload, guint payload_len)
+{
+    guint8 args_num;
+    guint8 arg_id;
+    guint8 i;
+    guint8 date[6];
+    
+    guint8 remote_domain_len = 0;
+    guint8 public_domain_len = 0;
+    
+    guint8 answer_count = 0;
+    
+    GByteArray *packet, *ba;
+    guint16 u16_value;
+    guint8 u8_value;
+    const gchar *server_host = NULL;
+    guint16 server_port = 0;
+    const gchar *tmp;
+    size_t len;
+    
+    if(payload_len < 7)
+    {
+        return;
+    }
+
+    memcpy(date, payload, 6);
+    args_num = payload[6];
+    
+    if(args_num > 252 || payload_len < (guint)args_num + 7)
+    {
+        return;
+    }
+    
+    if(net_data->vehicle_server_list!=NULL)
+    {
+        server_host = (const gchar *)net_data->vehicle_server_list;
+        if(server_host!=NULL)
+        {
+            tmp = g_strrstr_len(server_host, -1, ":");
+            if(tmp!=NULL)
+            {
+                sscanf(tmp, ":%hu", &server_port);
+            }
+            else
+            {
+                server_port = 8700;
+            }
+            
+            len = strlen(server_host);
+            if(len > 255)
+            {
+                remote_domain_len = 255;
+            }
+            else
+            {
+                remote_domain_len = len;
+            }
+        }
+    }
+    
+    packet = g_byte_array_new();
+    g_byte_array_append(packet, date, 6);
+    g_byte_array_append(packet, &args_num, 1);
+    
+    for(i=0;i<args_num;i++)
+    {
+        arg_id = payload[i+7];
+        
+        switch(arg_id)
+        {
+            case 1:
+            {
+                u16_value = tl_logger_log_update_timeout_get();
+                u16_value = g_htons(u16_value);
+                
+                u8_value = 1;
+                g_byte_array_append(packet, &u8_value, 1);
+                g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 2:
+            {
+                u16_value = net_data->vehicle_data_report_normal_timeout;
+                if(u16_value==0 || u16_value > 600)
+                {
+                    u16_value = 0xFFFE;
+                }
+                u16_value = g_htons(u16_value);
+                
+                u8_value = 2;
+                g_byte_array_append(packet, &u8_value, 1);
+                g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 3:
+            {
+                u16_value = net_data->vehicle_data_report_emergency_timeout *
+                    1000;
+                if(u16_value==0 || u16_value > 60000)
+                {
+                    u16_value = 0xFFFE;
+                }
+                u16_value = g_htons(u16_value);
+                
+                u8_value = 3;
+                g_byte_array_append(packet, &u8_value, 1);
+                g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 4:
+            {
+                u8_value = 4;
+                g_byte_array_append(packet, &u8_value, 1);
+                g_byte_array_append(packet, &remote_domain_len, 1);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 5:
+            {
+                u8_value = 5;
+                g_byte_array_append(packet, &u8_value, 1);
+                
+                if(server_host!=NULL)
+                {
+                    g_byte_array_append(packet, (const guint8 *)server_host,
+                        remote_domain_len);
+                }
+                
+                break;
+            }
+            case 6:
+            {
+                u16_value = server_port;
+                if(u16_value==0 || u16_value > 65531)
+                {
+                    u16_value = 0xFFFE;
+                }
+                u16_value = g_htons(u16_value);
+                
+                u8_value = 6;
+                g_byte_array_append(packet, &u8_value, 1);
+                g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+                
+                answer_count++;
+                break;
+            }
+            case 7:
+            {
+                u8_value = 7;
+                g_byte_array_append(packet, &u8_value, 1);
+                g_byte_array_append(packet, (const guint8 *)"NTI6U", 5);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 8:
+            {
+                u8_value = 8;
+                g_byte_array_append(packet, &u8_value, 1);
+                g_byte_array_append(packet, (const guint8 *)"10000", 5);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 9:
+            {
+                u8_value = 9;
+                g_byte_array_append(packet, &u8_value, 1);
+                
+                u8_value = net_data->vehicle_connection_heartbeat_timeout;
+                if(u8_value==0 || u8_value > 240)
+                {
+                    u8_value = 0xFE;
+                }
+                g_byte_array_append(packet, &u8_value, 1);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 0xA:
+            {
+                u16_value = net_data->vehicle_connection_answer_timeout;
+                if(u16_value==0 || u16_value > 600)
+                {
+                    u16_value = 0xFFFE;
+                }
+                u16_value = g_htons(u16_value);
+                
+                u8_value = 0xA;
+                g_byte_array_append(packet, &u8_value, 1);
+                g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 0xB:
+            {
+                u16_value = net_data->vehicle_connection_answer_timeout;
+                if(u16_value==0 || u16_value > 600)
+                {
+                    u16_value = 0xFFFE;
+                }
+                u16_value = g_htons(u16_value);
+                
+                u8_value = 0xB;
+                g_byte_array_append(packet, &u8_value, 1);
+                g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 0xC:
+            {                
+                u8_value = 0xC;
+                g_byte_array_append(packet, &u8_value, 1);
+                
+                u8_value = 0xFF;
+                g_byte_array_append(packet, &u8_value, 1);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 0xD:
+            {
+                u8_value = 0xD;
+                g_byte_array_append(packet, &u8_value, 1);
+                
+                u8_value = public_domain_len;
+                g_byte_array_append(packet, &u8_value, 1);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 0xE:
+            {
+                u8_value = 0xE;
+                g_byte_array_append(packet, &u8_value, 1);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 0xF:
+            {
+                u8_value = 0xF;
+                g_byte_array_append(packet, &u8_value, 1);
+                
+                u16_value = 0;
+                g_byte_array_append(packet, (const guint8 *)&u16_value, 2);
+                
+                answer_count++;
+                
+                break;
+            }
+            case 0x10:
+            {
+                u8_value = 0x10;
+                g_byte_array_append(packet, &u8_value, 1);
+                u8_value = 0x2;
+                g_byte_array_append(packet, &u8_value, 1);
+                
+                answer_count++;
+                
+                break;
+            }
+            default:
+            {
+                g_message("TLNet unknown query arugment %u", arg_id);
+                break;
+            }
+        }
+    }
+    
+    packet->data[6] = answer_count;
+    
+    ba = tl_net_packet_build(TL_NET_COMMAND_TYPE_QUERY,
+        TL_NET_ANSWER_TYPE_SUCCEED, (const guint8 *)net_data->vin,
+        strlen(net_data->vin), TL_NET_PACKET_ENCRYPTION_TYPE_NONE, packet);
+    g_byte_array_unref(packet);
+    tl_net_vehicle_connection_packet_output_request(net_data, ba, FALSE,
+        TL_NET_COMMAND_TYPE_QUERY, 0);
+    g_byte_array_unref(ba);
 }

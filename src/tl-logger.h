@@ -31,4 +31,7 @@ void *tl_logger_log_query_start(gboolean begin_time_set, gint64 begin_time,
     TLLoggerQueryResultCallback callback, gpointer user_data);
 void tl_logger_log_query_stop(void *handler);
 
+guint tl_logger_log_update_timeout_get();
+void tl_logger_log_update_timeout_set(guint timeout);
+
 #endif

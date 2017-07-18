@@ -59,6 +59,8 @@ typedef struct _TLLoggerData
     TLLoggerQueryData *query_working_data;
     GMutex query_queue_mutex;
     gboolean query_work_flag;
+    
+    guint log_update_timeout;
 }TLLoggerData;
 
 typedef struct _TLLoggerFileStat
@@ -1319,7 +1321,10 @@ gboolean tl_logger_init(const gchar *storage_base_path)
     
     g_dir_close(log_dir);
     
-    g_tl_logger_data.log_update_timeout_id = g_timeout_add_seconds(10,
+    g_tl_logger_data.log_update_timeout = 10000;
+    
+    g_tl_logger_data.log_update_timeout_id = g_timeout_add(
+        g_tl_logger_data.log_update_timeout,
         tl_logger_log_update_timer_cb, &g_tl_logger_data);
     
     g_tl_logger_data.write_thread = g_thread_new("tl-logger-write-thread",
@@ -1618,4 +1623,29 @@ void tl_logger_log_query_stop(void *handler)
         g_tl_logger_data.query_queue = g_queue_new();
     }
     g_mutex_unlock(&(g_tl_logger_data.query_queue_mutex));
+}
+
+guint tl_logger_log_update_timeout_get()
+{
+    return g_tl_logger_data.log_update_timeout;
+}
+
+void tl_logger_log_update_timeout_set(guint timeout)
+{
+    if(!g_tl_logger_data.initialized)
+    {
+        return;
+    }
+    
+    if(g_tl_logger_data.log_update_timeout_id>0 && timeout >= 1000 &&
+        timeout <= 60000)
+    {
+        g_tl_logger_data.log_update_timeout = timeout;
+        
+        g_source_remove(g_tl_logger_data.log_update_timeout_id);
+        
+        g_tl_logger_data.log_update_timeout_id = g_timeout_add(
+            g_tl_logger_data.log_update_timeout,
+            tl_logger_log_update_timer_cb, &g_tl_logger_data);
+    }
 }
