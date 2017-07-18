@@ -5,6 +5,7 @@
 #include "tl-net.h"
 #include "tl-logger.h"
 #include "tl-parser.h"
+#include "tl-gps.h"
 
 #define TL_NET_BACKLOG_MAXIMUM 45
 #define TL_NET_LOG_TO_DISK_TRIGGER 2048
@@ -173,6 +174,8 @@ static void tl_net_vehicle_packet_build_alarm_data(GByteArray *packet,
 static gboolean tl_net_vehicle_packet_build_rechargable_device_voltage_data(
     GByteArray *packet, GHashTable *log_table, guint16 start_frame);
 static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
+    GByteArray *packet, GHashTable *log_table);
+static void tl_net_vehicle_packet_build_vehicle_position_data(
     GByteArray *packet, GHashTable *log_table);
 
 static inline guint16 tl_net_crc16_compute(const guchar *data_p,
@@ -1193,6 +1196,8 @@ static gboolean tl_net_vehicle_data_report_timeout(gpointer user_data)
         
     tl_net_vehicle_packet_build_total_data(packet, current_data_table);
     tl_net_vehicle_packet_build_drive_motor_data(packet,
+        current_data_table);
+    tl_net_vehicle_packet_build_vehicle_position_data(packet,
         current_data_table);
     tl_net_vehicle_packet_build_extreme_data(packet, current_data_table);
     tl_net_vehicle_packet_build_alarm_data(packet, current_data_table);
@@ -3704,4 +3709,26 @@ static void tl_net_vehicle_packet_build_rechargable_device_temp_data(
 
         g_free(values);
     }
+}
+
+static void tl_net_vehicle_packet_build_vehicle_position_data(
+    GByteArray *packet, GHashTable *log_table)
+{
+    guint8 u8_value;
+    guint32 u32_value;
+    guint8 state = 0x1;
+    guint32 latitude = 0, longitude = 0;
+    
+    u8_value = TL_NET_VEHICLE_DATA_TYPE_VEHICLE_POSITION;
+    g_byte_array_append(packet, &u8_value, 1);
+    
+    tl_gps_state_get(&state, &latitude, &longitude);
+    
+    g_byte_array_append(packet, &state, 1);
+    
+    u32_value = g_htonl(longitude);
+    g_byte_array_append(packet, (const guint8 *)&u32_value, 4);
+    
+    u32_value = g_htonl(latitude);
+    g_byte_array_append(packet, (const guint8 *)&u32_value, 4);
 }

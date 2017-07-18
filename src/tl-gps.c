@@ -11,6 +11,10 @@ typedef struct _TLGPSData
     gboolean initialized;
     gboolean work_flag;
     GThread *work_thread;
+    
+    guint8 state;
+    guint32 latitude;
+    guint32 longitude;
 }TLGPSData;
 
 static TLGPSData g_tl_gps_data = {0};
@@ -26,6 +30,8 @@ static gpointer tl_gps_work_thread(gpointer user_data)
     {
         return NULL;
     }
+    
+    gps_data->work_flag = TRUE;
     
     while(gps_data->work_flag)
     {
@@ -56,14 +62,36 @@ static gpointer tl_gps_work_thread(gpointer user_data)
                     gdata.fix.mode==MODE_3D) && !isnan(gdata.fix.latitude) && 
                     !isnan(gdata.fix.longitude))
                 {
-                    g_message("Latitude: %lf, longitude: %lf, speed: %lf, "
+                    if(gdata.fix.latitude < 0)
+                    {
+                        gps_data->state |= 2;
+                    }
+                    else
+                    {
+                        gps_data->state &= ~2;
+                    }
+                    
+                    if(gdata.fix.longitude < 0)
+                    {
+                        gps_data->state |= 4;
+                    }
+                    else
+                    {
+                        gps_data->state &= ~4;
+                    }
+                    
+                    gps_data->latitude = gdata.fix.latitude * 1e6;
+                    gps_data->longitude = gdata.fix.longitude * 1e6;
+                    
+                    g_debug("Latitude: %lf, longitude: %lf, speed: %lf, "
                         "timestamp: %lf.", gdata.fix.latitude,
                         gdata.fix.longitude, gdata.fix.speed,
                         gdata.fix.time);
                 }
                 else
                 {
-                    g_message("No GPS data available.");
+                    gps_data->state &= ~1;
+                    g_debug("No GPS data available.");
                 }
             }
         }
@@ -88,6 +116,8 @@ gboolean tl_gps_init()
         return TRUE;
     }
     
+    g_tl_gps_data.state &= ~1;
+    
     g_tl_gps_data.work_thread = g_thread_new("tl-gps-thread",
         tl_gps_work_thread, &g_tl_gps_data);
     
@@ -111,4 +141,22 @@ void tl_gps_uninit()
     }
 
     g_tl_gps_data.initialized = FALSE;
+}
+
+void tl_gps_state_get(guint8 *state, guint32 *latitude, guint32 *longitude)
+{
+    if(state!=NULL)
+    {
+        *state = g_tl_gps_data.state;
+    }
+    
+    if(latitude!=NULL)
+    {
+        *latitude = g_tl_gps_data.latitude;
+    }
+    
+    if(longitude!=NULL)
+    {
+        *longitude = g_tl_gps_data.longitude;
+    }
 }
