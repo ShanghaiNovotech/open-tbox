@@ -1080,8 +1080,8 @@ static gpointer tl_logger_log_write_thread(gpointer user_data)
         
         if(logger_data->last_saved_data==NULL)
         {
-            g_usleep(100000);
             g_mutex_unlock(&(logger_data->cached_log_mutex));
+            g_usleep(100000);
             continue;
         }
         
@@ -1091,9 +1091,8 @@ static gpointer tl_logger_log_write_thread(gpointer user_data)
             g_list_free_full(logger_data->last_saved_data,
                 (GDestroyNotify)tl_logger_log_item_data_free);
             logger_data->last_saved_data = NULL;
-            
-            g_usleep(100000);
             g_mutex_unlock(&(logger_data->cached_log_mutex));
+            g_usleep(100000);
             continue;
         }
         
@@ -1103,9 +1102,8 @@ static gpointer tl_logger_log_write_thread(gpointer user_data)
             g_list_free_full(logger_data->last_saved_data,
                 (GDestroyNotify)tl_logger_log_item_data_free);
             logger_data->last_saved_data = NULL;
-            
-            g_usleep(100000);
             g_mutex_unlock(&(logger_data->cached_log_mutex));
+            g_usleep(100000);
             continue;
         }
         

@@ -59,6 +59,8 @@ typedef struct _TLNetData
     guint vehicle_connection_retry_cycle;
     gint64 vehicle_connection_login_request_timestamp;
     
+    gint64 vehicle_connection_timestamp;
+    
     guint vehicle_connection_answer_timeout;
     gint64 vehicle_connection_request_timestamp;
     
@@ -543,11 +545,14 @@ static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
     gssize write_size;
     const gchar *host = NULL;
     TLNetWriteBufferData *write_buffer_data;
+    gint64 now;
     
     if(net_data->current_vehicle_server!=NULL)
     {
         host = net_data->current_vehicle_server->data;
     }
+    
+    now = g_get_monotonic_time();
     
     do
     {
@@ -624,6 +629,8 @@ static gboolean tl_net_vehicle_connection_output_pollable_source_cb(
                     write_size);
             }
         }
+        
+        net_data->vehicle_connection_timestamp = now;
         
         if(error!=NULL)
         {
@@ -752,6 +759,7 @@ static gboolean tl_net_vehicle_connection_input_pollable_source_cb(
     guint8 checksum, rchecksum;
     gchar vin_code[18] = {0};
     gchar buffer[4097];
+    gint64 now;
     
     if(user_data==NULL)
     {
@@ -762,6 +770,8 @@ static gboolean tl_net_vehicle_connection_input_pollable_source_cb(
     {
         host = net_data->current_vehicle_server->data;
     }
+    
+    now = g_get_monotonic_time();
     
     while((read_size=g_pollable_input_stream_read_nonblocking(
         G_POLLABLE_INPUT_STREAM(pollable_stream), buffer, 4096,
@@ -852,6 +862,8 @@ static gboolean tl_net_vehicle_connection_input_pollable_source_cb(
                 }
             }
         }
+        
+        net_data->vehicle_connection_timestamp = now;
     }
     
     if(error!=NULL && error->code==G_IO_ERROR_WOULD_BLOCK)
@@ -1054,6 +1066,14 @@ static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
         {
             GDateTime *dt;
             
+            if(now - net_data->vehicle_connection_timestamp >
+                (gint64)net_data->vehicle_connection_answer_timeout * 1e6)
+            {
+                g_warning("TLNet connection timeout!");
+                tl_net_vehicle_connection_disconnect(net_data);
+                break;
+            }
+            
             if(g_queue_is_empty(net_data->vehicle_write_queue) &&
                 net_data->vehicle_write_buffer==NULL)
             {
@@ -1105,7 +1125,8 @@ static gboolean tl_net_vehicle_connection_check_timeout_cb(gpointer user_data)
             if(net_data->vehicle_connection_retry_count >
                 net_data->vehicle_connection_retry_maximum)
             {
-                if(net_data->current_vehicle_server!=NULL)
+                if(net_data->current_vehicle_server!=NULL &&
+                    g_list_next(net_data->current_vehicle_server)!=NULL)
                 {
                     net_data->current_vehicle_server = g_list_next(
                         net_data->current_vehicle_server);
