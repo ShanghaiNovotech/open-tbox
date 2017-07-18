@@ -3782,9 +3782,9 @@ static void tl_net_command_vehicle_data_query(TLNetData *net_data,
     GByteArray *packet, *ba;
     guint16 u16_value;
     guint8 u8_value;
-    const gchar *server_host = NULL;
+    gchar *server_host = NULL;
     guint16 server_port = 0;
-    const gchar *tmp;
+    const gchar *tmp1, *tmp2;
     size_t len;
     
     if(payload_len < 7)
@@ -3802,27 +3802,35 @@ static void tl_net_command_vehicle_data_query(TLNetData *net_data,
     
     if(net_data->vehicle_server_list!=NULL)
     {
-        server_host = (const gchar *)net_data->vehicle_server_list;
-        if(server_host!=NULL)
+        tmp1 = (const gchar *)net_data->vehicle_server_list->data;
+        if(tmp1!=NULL)
         {
-            tmp = g_strrstr_len(server_host, -1, ":");
-            if(tmp!=NULL)
+            tmp2 = g_strrstr_len(tmp1, -1, ":");
+            if(tmp2!=NULL)
             {
-                sscanf(tmp, ":%hu", &server_port);
+                if(tmp2 > tmp1 + 1)
+                {
+                    sscanf(tmp2, ":%hu", &server_port);
+                    server_host = g_strndup(tmp1, tmp2 - tmp1 - 1);
+                }
             }
             else
             {
+                server_host = g_strdup(tmp1);
                 server_port = 8700;
             }
             
-            len = strlen(server_host);
-            if(len > 255)
+            if(server_host!=NULL)
             {
-                remote_domain_len = 255;
-            }
-            else
-            {
-                remote_domain_len = len;
+                len = strlen(server_host);
+                if(len > 255)
+                {
+                    remote_domain_len = 255;
+                }
+                else
+                {
+                    remote_domain_len = len;
+                }
             }
         }
     }
@@ -3928,7 +3936,7 @@ static void tl_net_command_vehicle_data_query(TLNetData *net_data,
             {
                 u8_value = 7;
                 g_byte_array_append(packet, &u8_value, 1);
-                g_byte_array_append(packet, (const guint8 *)"NTI6U", 5);
+                g_byte_array_append(packet, (const guint8 *)"NI6UA", 5);
                 
                 answer_count++;
                 
@@ -4056,6 +4064,11 @@ static void tl_net_command_vehicle_data_query(TLNetData *net_data,
                 break;
             }
         }
+    }
+    
+    if(server_host!=NULL)
+    {
+        g_free(server_host);
     }
     
     packet->data[6] = answer_count;
