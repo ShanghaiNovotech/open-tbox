@@ -89,6 +89,8 @@ typedef struct _TLNetData
     
     gint64 vehicle_data_last_timestamp;
     GHashTable *pending_vehicle_data_timestamp_table;
+    
+    guint vehicle_connection_change_server_timeout_id;
 }TLNetData;
 
 typedef struct _TLNetWriteBufferData
@@ -181,6 +183,8 @@ static void tl_net_vehicle_packet_build_vehicle_position_data(
     GByteArray *packet, GHashTable *log_table);
     
 static void tl_net_command_vehicle_data_query(TLNetData *net_data,
+    const guint8 *payload, guint payload_len);
+static void tl_net_command_vehicle_setup(TLNetData *net_data,
     const guint8 *payload, guint payload_len);
 
 static inline guint16 tl_net_crc16_compute(const guchar *data_p,
@@ -741,12 +745,26 @@ static void tl_net_packet_parse(TLNetData *net_data, guint8 command,
             }
             break;
         }
+        case TL_NET_COMMAND_TYPE_REALTIME_DATA:
+        case TL_NET_COMMAND_TYPE_REPEAT_DATA:
+        case TL_NET_COMMAND_TYPE_CLIENT_HEARTBEAT:
+        {
+            break;
+        }
         case TL_NET_COMMAND_TYPE_QUERY:
         {
             if(answer==TL_NET_ANSWER_TYPE_COMMAND)
             {
                 tl_net_command_vehicle_data_query(net_data, payload,
                     payload_len);
+            }
+            break;
+        }
+        case TL_NET_COMMAND_TYPE_SETUP:
+        {
+            if(answer==TL_NET_ANSWER_TYPE_COMMAND)
+            {
+                tl_net_command_vehicle_setup(net_data, payload, payload_len);
             }
             break;
         }
@@ -1005,10 +1023,20 @@ static void tl_net_vehicle_connect_host_async_cb(GObject *source,
                 "error!", host);
         }
         
-        if(net_data->current_vehicle_server!=NULL)
+        if(net_data->vehicle_connection_retry_count >
+            net_data->vehicle_connection_retry_maximum)
         {
-            net_data->current_vehicle_server = g_list_next(
-                net_data->current_vehicle_server);
+            if(net_data->current_vehicle_server!=NULL &&
+                g_list_next(net_data->current_vehicle_server)!=NULL)
+            {
+                net_data->current_vehicle_server = g_list_next(
+                    net_data->current_vehicle_server);
+            }
+            net_data->vehicle_connection_retry_count = 0;
+        }
+        else
+        {
+            net_data->vehicle_connection_retry_count++;
         }
     }
     g_clear_error(&error);
@@ -1887,6 +1915,13 @@ void tl_net_uninit()
     if(!g_tl_net_data.initialized)
     {
         return;
+    }
+    
+    if(g_tl_net_data.vehicle_connection_change_server_timeout_id>0)
+    {
+        g_source_remove(
+            g_tl_net_data.vehicle_connection_change_server_timeout_id);
+        g_tl_net_data.vehicle_connection_change_server_timeout_id = 0;
     }
     
     if(g_tl_net_data.vehicle_data_report_timer_timeout>0)
@@ -3808,10 +3843,10 @@ static void tl_net_command_vehicle_data_query(TLNetData *net_data,
             tmp2 = g_strrstr_len(tmp1, -1, ":");
             if(tmp2!=NULL)
             {
-                if(tmp2 > tmp1 + 1)
+                if(tmp2 > tmp1)
                 {
                     sscanf(tmp2, ":%hu", &server_port);
-                    server_host = g_strndup(tmp1, tmp2 - tmp1 - 1);
+                    server_host = g_strndup(tmp1, tmp2 - tmp1);
                 }
             }
             else
@@ -4080,4 +4115,468 @@ static void tl_net_command_vehicle_data_query(TLNetData *net_data,
     tl_net_vehicle_connection_packet_output_request(net_data, ba, FALSE,
         TL_NET_COMMAND_TYPE_QUERY, 0);
     g_byte_array_unref(ba);
+}
+
+static gboolean tl_net_command_vehicle_setup_server_host_timeout_cb(
+    gpointer user_data)
+{
+    TLNetData *net_data = (TLNetData *)user_data;
+    
+    if(user_data==NULL)
+    {
+        return FALSE;
+    }
+    
+    net_data->current_vehicle_server = net_data->vehicle_server_list;
+    net_data->vehicle_connection_retry_count = 0;
+    tl_net_vehicle_connection_disconnect(net_data);
+    
+    net_data->vehicle_connection_change_server_timeout_id = 0;
+    
+    return FALSE;
+}
+
+static void tl_net_command_vehicle_setup(TLNetData *net_data,
+    const guint8 *payload, guint payload_len)
+{
+    guint8 args_num;
+    guint8 arg_id;
+    guint8 date[6];
+    guint i;
+    gboolean flag = TRUE;
+    guint8 remote_domain_len = 0;
+    guint8 public_domain_len = 0;
+    guint16 u16_value;
+    guint8 u8_value;
+    
+    gchar *remote_domain_address;
+    
+    gboolean error = FALSE;
+    
+    gboolean log_update_timeout_set = FALSE;
+    guint log_update_timeout = 10000;
+    gboolean report_normal_timeout_set = FALSE;
+    guint report_normal_timeout = 5;
+    gboolean report_emergency_timeout_set = FALSE;
+    guint report_emergency_timeout = 1;
+    gboolean remote_domain_set = FALSE;
+    gchar remote_domain[256] = {0};
+    gboolean remote_domain_port_set = FALSE;
+    guint16 remote_domain_port = 8700;
+    gboolean heartbeat_timeout_set = FALSE;
+    guint heartbeat_timeout = 10;
+    gboolean answer_timeout_set = FALSE;
+    guint answer_timeout = 60;
+    
+    if(payload_len < 7)
+    {
+        return;
+    }
+
+    memcpy(date, payload, 6);
+    args_num = payload[6];
+    
+    if(args_num > 252 || payload_len < (guint)args_num + 7)
+    {
+        return;
+    }
+    
+    for(i=7;i<payload_len && flag;)
+    {
+        arg_id = payload[i];
+        i++;
+        
+        switch(arg_id)
+        {
+            case 1:
+            {
+                if(i+2>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+                memcpy(&u16_value, payload+i, 2);
+                i+=2;
+                u16_value = g_ntohs(u16_value);
+                
+                if(u16_value >= 1000 && u16_value <= 60000)
+                {
+                    log_update_timeout = u16_value;
+                    log_update_timeout_set = TRUE;
+                }
+                if(u16_value < 1000)
+                {
+                    log_update_timeout = 1000;
+                    log_update_timeout_set = TRUE;
+                }
+                else if(u16_value > 60000 && u16_value < 0xFFFE)
+                {
+                    log_update_timeout = 60000;
+                    log_update_timeout_set = TRUE;
+                }
+                else if(u16_value==0xFFFE)
+                {
+                    error = TRUE;
+                    flag = FALSE;
+                }
+                
+                break;
+            }
+            case 2:
+            {
+                if(i+2>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+                memcpy(&u16_value, payload+i, 2);
+                i+=2;
+                u16_value = g_ntohs(u16_value);
+                
+                if(u16_value >=1 && u16_value <= 600)
+                {
+                    report_normal_timeout = u16_value;
+                    report_normal_timeout_set = TRUE;
+                }
+                else if(u16_value==0)
+                {
+                    report_normal_timeout = 1;
+                    report_normal_timeout_set = TRUE;
+                }
+                else if(u16_value > 600 && u16_value < 0xFFFE)
+                {
+                    report_normal_timeout = 600;
+                    report_normal_timeout_set = TRUE;
+                }
+                else if(u16_value==0xFFFE)
+                {
+                    error = TRUE;
+                    flag = FALSE;
+                }
+                
+                break;
+            }
+            case 3:
+            {
+                if(i+2>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+                memcpy(&u16_value, payload+i, 2);
+                i+=2;
+                u16_value = g_ntohs(u16_value);
+                
+                if(u16_value >=1000 && u16_value <= 60000)
+                {
+                    report_emergency_timeout = u16_value / 1000;
+                    report_emergency_timeout_set = TRUE;
+                }
+                else if(u16_value < 1000)
+                {
+                    report_emergency_timeout = 1;
+                    report_emergency_timeout_set = TRUE;
+                }
+                else if(u16_value > 60000 && u16_value < 0xFFFE)
+                {
+                    report_emergency_timeout = 60;
+                    report_emergency_timeout_set = TRUE;
+                }
+                else if(u16_value==0xFFFE)
+                {
+                    error = TRUE;
+                    flag = FALSE;
+                }
+                
+                break;
+            }
+            case 4:
+            {
+                if(i+1>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+                
+                remote_domain_len = payload[i];
+                i+=1;
+                
+                break;
+            }
+            case 5:
+            {
+                if(i+remote_domain_len>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+
+                memcpy(remote_domain, payload+i, remote_domain_len);
+                i+=remote_domain_len;
+                remote_domain_set = TRUE;
+                
+                break;
+            }
+            case 6:
+            {
+                if(i+2>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+                memcpy(&u16_value, payload+i, 2);
+                i+=2;
+                u16_value = g_ntohs(u16_value);
+                
+                if(u16_value>0 && u16_value<0xFFFE)
+                {
+                    remote_domain_port = u16_value;
+                    remote_domain_port_set = TRUE;
+                }
+                else if(u16_value==0)
+                {
+                    remote_domain_port = 8700;
+                    remote_domain_port_set = TRUE;
+                }
+                else if(u16_value==0xFFFE)
+                {
+                    flag = FALSE;
+                    error = TRUE;
+                }
+
+                break;
+            }
+            case 9:
+            {
+                if(i+1>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+
+                u8_value = payload[i];
+                i+=1;
+                
+                if(u8_value > 0 && u8_value < 254)
+                {
+                    heartbeat_timeout = u8_value;
+                    heartbeat_timeout_set = TRUE;
+                }
+                else if(u8_value==0)
+                {
+                    heartbeat_timeout = 1;
+                    heartbeat_timeout_set = TRUE;
+                }
+                else if(u8_value==0xFE)
+                {
+                    flag = FALSE;
+                    error = TRUE;
+                }
+
+                break;
+            }
+            case 0xA:
+            {
+                if(i+2>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+
+                memcpy(&u16_value, payload+i, 2);
+                i+=2;
+                u16_value = g_ntohs(u16_value);
+                
+                if(answer_timeout_set)
+                {
+                    break;
+                }
+                
+                if(u16_value >= 15 && u16_value <= 600)
+                {
+                    answer_timeout = u16_value;
+                    answer_timeout_set = TRUE;
+                }
+                else if(u16_value < 15)
+                {
+                    answer_timeout = 15;
+                    answer_timeout_set = TRUE;
+                }
+                else if(u16_value > 600 && u16_value < 0xFFFE)
+                {
+                    answer_timeout = 600;
+                    answer_timeout_set = TRUE;
+                }
+                else if(u16_value==0xFFFE)
+                {
+                    flag = FALSE;
+                    error = TRUE;
+                }
+                
+                break;
+            }
+            case 0xB:
+            {
+                if(i+2>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+
+                memcpy(&u16_value, payload+i, 2);
+                i+=2;
+                u16_value = g_ntohs(u16_value);
+                                
+                if(u16_value >= 15 && u16_value <= 600)
+                {
+                    answer_timeout = u16_value;
+                    answer_timeout_set = TRUE;
+                }
+                else if(u16_value < 15)
+                {
+                    answer_timeout = 15;
+                    answer_timeout_set = TRUE;
+                }
+                else if(u16_value > 600 && u16_value < 0xFFFE)
+                {
+                    answer_timeout = 600;
+                    answer_timeout_set = TRUE;
+                }
+                else if(u16_value==0xFFFE)
+                {
+                    flag = FALSE;
+                    error = TRUE;
+                }
+
+                break;
+            }
+            case 0xC:
+            {   
+                if(i+1>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+                
+                i+=1;
+
+                break;
+            }
+            case 0xD:
+            {
+                if(i+1>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+                
+                public_domain_len = payload[i];
+                i+=1;
+
+                break;
+            }
+            case 0xE:
+            {
+                if(i+public_domain_len>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+                
+                i+=public_domain_len;
+
+                break;
+            }
+            case 0xF:
+            {
+                if(i+2>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+
+                i+=2;
+                
+                break;
+            }
+            case 0x10:
+            {
+                if(i+1>payload_len)
+                {
+                    flag = FALSE;
+                    break;
+                }
+
+                i+=1;
+                
+                break;
+            }
+            default:
+            {
+                g_message("TLNet unknown query arugment %u", arg_id);
+                flag = FALSE;
+                break;
+            }
+        }
+    }
+    
+    
+    if(!error)
+    {
+        if(log_update_timeout_set)
+        {
+            tl_logger_log_update_timeout_set(log_update_timeout);
+        }
+        
+        if(report_normal_timeout_set)
+        {
+            net_data->vehicle_data_report_normal_timeout =
+                report_normal_timeout;
+        }
+        
+        if(report_emergency_timeout_set)
+        {
+            net_data->vehicle_data_report_emergency_timeout = 
+                report_emergency_timeout;
+        }
+        
+        if(remote_domain_set)
+        {
+            if(remote_domain_port_set)
+            {
+                remote_domain_address = g_strdup_printf("%s:%hu",
+                    remote_domain, remote_domain_port);
+            }
+            else
+            {
+                remote_domain_address = g_strdup_printf("%s:8700",
+                    remote_domain);
+            }
+            
+            net_data->vehicle_server_list = g_list_prepend(
+                net_data->vehicle_server_list, remote_domain_address);
+            
+            if(net_data->vehicle_connection_change_server_timeout_id > 0)
+            {
+                g_source_remove(
+                    net_data->vehicle_connection_change_server_timeout_id);
+            }
+            net_data->vehicle_connection_change_server_timeout_id =
+                g_timeout_add_seconds(5,
+                    tl_net_command_vehicle_setup_server_host_timeout_cb,
+                    net_data);
+        }
+        
+        if(heartbeat_timeout_set)
+        {
+            net_data->vehicle_connection_heartbeat_timeout =
+                heartbeat_timeout;
+        }
+        
+        if(answer_timeout_set)
+        {
+            net_data->vehicle_connection_answer_timeout =
+                answer_timeout;
+        }
+    }
 }
