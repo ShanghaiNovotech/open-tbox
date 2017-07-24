@@ -186,6 +186,8 @@ static void tl_net_command_vehicle_data_query(TLNetData *net_data,
     const guint8 *payload, guint payload_len);
 static void tl_net_command_vehicle_setup(TLNetData *net_data,
     const guint8 *payload, guint payload_len);
+static void tl_net_command_terminal_control(TLNetData *net_data,
+    const guint8 *payload, guint payload_len);
 
 static inline guint16 tl_net_crc16_compute(const guchar *data_p,
     gsize length)
@@ -244,8 +246,10 @@ static gboolean tl_net_config_load(TLNetData *net_data,
 {
     GKeyFile *keyfile;
     GError *error = NULL;
-    gchar *svalue;
+    const gchar *svalue;
     gint ivalue;
+    guint i;
+    gchar server_key[16] = {0};
     
     keyfile = g_key_file_new();
     
@@ -271,34 +275,116 @@ static gboolean tl_net_config_load(TLNetData *net_data,
         net_data->session = 0;
     }
     
+    ivalue = g_key_file_get_integer(keyfile, "Connnection", "AnswerTimeout",
+        NULL);
+    if(ivalue>0 && ivalue<=600)
+    {
+        net_data->vehicle_connection_answer_timeout = ivalue;
+    }
+    
+    ivalue = g_key_file_get_integer(keyfile, "Connnection", "HeartbeatTimeout",
+        NULL);
+    if(ivalue>0 && ivalue<=240)
+    {
+        net_data->vehicle_connection_heartbeat_timeout = ivalue;
+    }
+    
+    ivalue = g_key_file_get_integer(keyfile, "Connnection",
+        "ReportNormalTimeout", NULL);
+    if(ivalue>0 && ivalue<=600)
+    {
+        net_data->vehicle_data_report_normal_timeout = ivalue;
+    }
+    
+    ivalue = g_key_file_get_integer(keyfile, "Connnection",
+        "ReportEmergencyTimeout", NULL);
+    if(ivalue>0 && ivalue<=600)
+    {
+        net_data->vehicle_data_report_emergency_timeout = ivalue;
+    }
+    
+    ivalue = g_key_file_get_integer(keyfile, "Connnection",
+        "LocalLogUpdateTimeout", NULL);
+    if(ivalue>0 && ivalue<=60000)
+    {
+        tl_logger_log_update_timeout_set(ivalue);
+    }
+    
+    for(i=0;i<5;i++)
+    {
+        snprintf(server_key, 15, "Host%u", i+1);
+        svalue = g_key_file_get_string(keyfile, "Server", server_key, NULL);
+        if(svalue!=NULL)
+        {
+            net_data->vehicle_server_list = g_list_append(
+                net_data->vehicle_server_list, g_strdup(svalue));
+        }
+    }
+    
     g_key_file_free(keyfile);
     
     return TRUE;
 }
 
-static gboolean tl_net_config_save(TLNetData *net_data, const gchar *conf_file)
+static void tl_net_config_sync()
 {
     GKeyFile *keyfile;
     GError *error = NULL;
+    guint i;
+    const GList *list_foreach;
+    gchar server_key[16] = {0};
+    
+    if(!g_tl_net_data.initialized)
+    {
+        return;
+    }
+    
+    if(g_tl_net_data.conf_file_path==NULL)
+    {
+        return;
+    }
     
     keyfile = g_key_file_new();
     
-    g_key_file_set_string(keyfile, "Network", "LastVIN", net_data->vin);
-    g_key_file_set_integer(keyfile, "Network", "LastSession",
-        net_data->session);
+    g_key_file_load_from_file(keyfile, g_tl_net_data.conf_file_path,
+        G_KEY_FILE_NONE, NULL);
         
-    if(!g_key_file_save_to_file(keyfile, conf_file, &error))
+    g_key_file_set_string(keyfile, "Network", "LastVIN", g_tl_net_data.vin);
+    g_key_file_set_integer(keyfile, "Network", "LastSession",
+        g_tl_net_data.session);
+    g_key_file_set_integer(keyfile, "Connnection", "AnswerTimeout",
+        g_tl_net_data.vehicle_connection_answer_timeout);
+    g_key_file_set_integer(keyfile, "Connnection", "HeartbeatTimeout",
+        g_tl_net_data.vehicle_connection_heartbeat_timeout);
+    g_key_file_set_integer(keyfile, "Connnection", "ReportNormalTimeout",
+        g_tl_net_data.vehicle_data_report_normal_timeout);
+    g_key_file_set_integer(keyfile, "Connnection", "ReportEmergencyTimeout",
+        g_tl_net_data.vehicle_data_report_emergency_timeout);
+    g_key_file_set_integer(keyfile, "Connnection", "LocalLogUpdateTimeout",
+        tl_logger_log_update_timeout_get());
+        
+    for(list_foreach=g_tl_net_data.vehicle_server_list, i=0;
+        list_foreach!=NULL && g_list_next(list_foreach)!=NULL && i<5;
+        list_foreach=g_list_next(list_foreach), i++)
     {
-        if(error!=NULL)
+        if(list_foreach->data==NULL)
         {
-            g_warning("TLNet failed to save config file: %s", error->message);
-            g_clear_error(&error);
+            continue;
         }
+        
+        snprintf(server_key, 15, "Host%u", i+1);
+        g_key_file_set_string(keyfile, "Server", server_key,
+            (const gchar *)list_foreach->data);
     }
-
-    g_key_file_free(keyfile);
     
-    return TRUE;
+    g_key_file_save_to_file(keyfile, g_tl_net_data.conf_file_path, &error);
+    if(error!=NULL)
+    {
+        g_warning("TLNet failed to save config data: %s", error->message);
+        g_clear_error(&error);
+    }
+    
+    g_key_file_free(keyfile);
 }
 
 static GByteArray *tl_net_packet_build(TLNetCommandType command,
@@ -392,7 +478,7 @@ static GByteArray *tl_net_login_packet_build(TLNetData *net_data)
     g_byte_array_append(ba, &sec, 1);
     
     net_data->session++;
-    tl_net_config_save(net_data, net_data->conf_file_path);
+    tl_net_config_sync();
     
     s_value = g_htons(net_data->session);
     g_byte_array_append(ba, (const guint8 *)&s_value, 2);
@@ -765,6 +851,15 @@ static void tl_net_packet_parse(TLNetData *net_data, guint8 command,
             if(answer==TL_NET_ANSWER_TYPE_COMMAND)
             {
                 tl_net_command_vehicle_setup(net_data, payload, payload_len);
+            }
+            break;
+        }
+        case TL_NET_COMMAND_TYPE_TERMINAL_CONTROL:
+        {
+            if(answer==TL_NET_ANSWER_TYPE_COMMAND)
+            {
+                tl_net_command_terminal_control(net_data, payload,
+                    payload_len);
             }
             break;
         }
@@ -1810,6 +1905,15 @@ static gpointer tl_net_vehicle_data_log_thread(gpointer user_data)
     }
     
     return NULL;
+}
+
+static void tl_net_reset_arguments()
+{
+    g_tl_net_data.vehicle_connection_answer_timeout = 60;
+    g_tl_net_data.vehicle_connection_heartbeat_timeout = 10;
+    g_tl_net_data.vehicle_data_report_normal_timeout = 5;
+    g_tl_net_data.vehicle_data_report_emergency_timeout = 1;
+    tl_logger_log_update_timeout_set(10000);
 }
 
 gboolean tl_net_init(const gchar *vin, const gchar *iccid,
@@ -4142,7 +4246,7 @@ static void tl_net_command_vehicle_setup(TLNetData *net_data,
     guint8 args_num;
     guint8 arg_id;
     guint8 date[6];
-    guint i;
+    guint i, j;
     gboolean flag = TRUE;
     guint8 remote_domain_len = 0;
     guint8 public_domain_len = 0;
@@ -4167,6 +4271,9 @@ static void tl_net_command_vehicle_setup(TLNetData *net_data,
     guint heartbeat_timeout = 10;
     gboolean answer_timeout_set = FALSE;
     guint answer_timeout = 60;
+    
+    gboolean need_config_sync = FALSE;
+    GList *list_foreach, *list_next;
     
     if(payload_len < 7)
     {
@@ -4526,18 +4633,21 @@ static void tl_net_command_vehicle_setup(TLNetData *net_data,
         if(log_update_timeout_set)
         {
             tl_logger_log_update_timeout_set(log_update_timeout);
+            need_config_sync = TRUE;
         }
         
         if(report_normal_timeout_set)
         {
             net_data->vehicle_data_report_normal_timeout =
                 report_normal_timeout;
+            need_config_sync = TRUE;
         }
         
         if(report_emergency_timeout_set)
         {
             net_data->vehicle_data_report_emergency_timeout = 
                 report_emergency_timeout;
+            need_config_sync = TRUE;
         }
         
         if(remote_domain_set)
@@ -4553,6 +4663,26 @@ static void tl_net_command_vehicle_setup(TLNetData *net_data,
                     remote_domain);
             }
             
+            for(list_foreach=net_data->vehicle_server_list, j=0;
+                list_foreach!=NULL;)
+            {
+                if(j<3)
+                {
+                    list_foreach = g_list_next(list_foreach);
+                    j++;
+                }
+                else if(g_list_next(list_foreach)!=NULL)
+                {
+                    list_next = g_list_next(list_foreach);
+                    if(g_list_next(list_next)!=NULL)
+                    {
+                        g_free(g_list_next(list_next)->data);
+                        net_data->vehicle_server_list = g_list_delete_link(
+                            net_data->vehicle_server_list, list_next);
+                    }
+                }
+            }
+            
             net_data->vehicle_server_list = g_list_prepend(
                 net_data->vehicle_server_list, remote_domain_address);
             
@@ -4565,18 +4695,89 @@ static void tl_net_command_vehicle_setup(TLNetData *net_data,
                 g_timeout_add_seconds(5,
                     tl_net_command_vehicle_setup_server_host_timeout_cb,
                     net_data);
+                    
+            need_config_sync = TRUE;
         }
         
         if(heartbeat_timeout_set)
         {
             net_data->vehicle_connection_heartbeat_timeout =
                 heartbeat_timeout;
+            need_config_sync = TRUE;
         }
         
         if(answer_timeout_set)
         {
             net_data->vehicle_connection_answer_timeout =
                 answer_timeout;
+            need_config_sync = TRUE;
+        }
+    }
+    
+    if(need_config_sync)
+    {
+        tl_net_config_sync();
+    }
+}
+
+static void tl_net_command_terminal_control(TLNetData *net_data,
+    const guint8 *payload, guint payload_len)
+{
+    guint8 command;
+    GError *error = NULL;
+    
+    if(payload_len < 7)
+    {
+        return;
+    }
+    
+    command = payload[6];
+    
+    switch(command)
+    {
+        case 1:
+        {
+            //TODO: Run upgrade.
+            break;
+        }
+        case 2:
+        {
+            if(!g_spawn_command_line_async("/sbin/poweroff", &error))
+            {
+                g_warning("TLNet failed to power off!");
+                g_clear_error(&error);
+            }
+            break;
+        }
+        case 3:
+        {
+            if(!g_spawn_command_line_async("/sbin/reboot", &error))
+            {
+                g_warning("TLNet failed to reset!");
+                g_clear_error(&error);
+            }
+            break;
+        }
+        case 4:
+        {
+            tl_net_reset_arguments();
+            break;
+        }
+        case 5:
+        {
+            if(!g_spawn_command_line_async("/usr/bin/killall -9 wvdial",
+                &error))
+            {
+                g_warning("TLNet failed to reset!");
+                g_clear_error(&error);
+            }
+            break;
+        }
+        default:
+        {
+            g_message("TLNet unknown command in terminal control %u.",
+                command);
+            break;
         }
     }
 }
