@@ -1914,6 +1914,8 @@ static void tl_net_reset_arguments()
     g_tl_net_data.vehicle_data_report_normal_timeout = 5;
     g_tl_net_data.vehicle_data_report_emergency_timeout = 1;
     tl_logger_log_update_timeout_set(10000);
+    
+    tl_net_config_sync();
 }
 
 gboolean tl_net_init(const gchar *vin, const gchar *iccid,
