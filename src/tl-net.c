@@ -4727,6 +4727,7 @@ static void tl_net_command_terminal_control(TLNetData *net_data,
 {
     guint8 command;
     GError *error = NULL;
+    FILE *fp;
     
     if(payload_len < 7)
     {
@@ -4767,11 +4768,20 @@ static void tl_net_command_terminal_control(TLNetData *net_data,
         }
         case 5:
         {
-            if(!g_spawn_command_line_async("/usr/bin/killall -9 wvdial",
+            if(!g_spawn_command_line_async("/usr/bin/poff gprs",
                 &error))
             {
-                g_warning("TLNet failed to reset!");
+                g_warning("TLNet failed to disconnect network!");
                 g_clear_error(&error);
+            }
+            else
+            {
+                fp = fopen("/tmp/gprs-off", "w");
+                if(fp!=NULL)
+                {
+                    fprintf(fp, "DISCONNECT");
+                    fclose(fp);
+                }
             }
             break;
         }
