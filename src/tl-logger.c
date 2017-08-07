@@ -1463,6 +1463,12 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
             idata->unit = item_data->unit;
             idata->source = item_data->source;
             idata->offset = item_data->offset;
+            idata->list_index = item_data->list_index;
+            if(g_strcmp0(idata->list_parent, item_data->list_parent)!=0)
+            {
+                g_free(idata->list_parent);
+                idata->list_parent = g_strdup(item_data->list_parent);
+            }
             
             if(item_data->list_parent!=NULL && pindex->len > 0)
             {
@@ -1485,8 +1491,8 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
                 }
                 else
                 {
-                    g_snprintf(svalue, 15, "%u:", (guint)item_data->value);
-                    g_string_prepend(pindex, svalue);
+                    g_snprintf(svalue, 15, ":%u", (guint)item_data->value);
+                    g_string_append(pindex, svalue);
                 }
                 
                 if(idata->index_table==NULL)
@@ -1530,8 +1536,8 @@ void tl_logger_current_data_update(const TLLoggerLogItemData *item_data)
             }
             else
             {
-                g_snprintf(svalue, 15, "%u:", (guint)item_data->value);
-                g_string_prepend(pindex, svalue);
+                g_snprintf(svalue, 15, ":%u", (guint)item_data->value);
+                g_string_append(pindex, svalue);
             }
             
             idata->index_table = g_hash_table_new_full(g_str_hash,
