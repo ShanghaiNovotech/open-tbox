@@ -2322,14 +2322,15 @@ static void tl_net_vehicle_packet_build_total_data(GByteArray *packet,
     item_data = g_hash_table_lookup(log_table, TL_PARSER_SOC_STATE);
     if(item_data!=NULL)
     {
-        if(item_data->value>100)
+        temp = (gdouble)item_data->value * item_data->unit +
+            item_data->offset;
+        if(temp>100)
         {
             u8_value = 0xFE;
         }
         else
         {
-            u8_value = (gdouble)item_data->value * item_data->unit +
-                item_data->offset;
+            u8_value = temp;
         }
     }
     else
