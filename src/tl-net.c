@@ -17,6 +17,8 @@ typedef struct _TLNetData
     gboolean initialized;
     gchar *conf_file_path;
     gchar *log_path;
+    gchar hwversion[6];
+    gchar fwversion[6];
     
     GSocketClient *vehicle_client;
     GSocketConnection *vehicle_connection;
@@ -1922,7 +1924,9 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     const gchar *conf_path, const gchar *log_path,
     const gchar *fallback_vehicle_server_host,
     guint16 fallback_vehicle_server_port)
-{    
+{
+    FILE *fp;
+    
     if(g_tl_net_data.initialized)
     {
         g_warning("TLNet already initialized!");
@@ -1959,6 +1963,20 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
     
     g_tl_net_data.vehicle_connection_state = 0;
     g_tl_net_data.vehicle_last_alarm_level = 0;
+    
+    fp = fopen("/etc/tboxhwver", "r");
+    if(fp!=NULL)
+    {
+        fread(g_tl_net_data.hwversion, 1, 5, fp);
+        fclose(fp);
+    }
+    
+    fp = fopen("/etc/tboxfwver", "r");
+    if(fp!=NULL)
+    {
+        fread(g_tl_net_data.fwversion, 1, 5, fp);
+        fclose(fp);
+    }
     
     g_mutex_init(&(g_tl_net_data.vehicle_data_mutex));
     g_mutex_init(&(g_tl_net_data.vehicle_backlog_data_mutex));
@@ -4113,7 +4131,8 @@ static void tl_net_command_vehicle_data_query(TLNetData *net_data,
             {
                 u8_value = 7;
                 g_byte_array_append(packet, &u8_value, 1);
-                g_byte_array_append(packet, (const guint8 *)"NI6UA", 5);
+                g_byte_array_append(packet, (const guint8 *)
+                    net_data->hwversion, 5);
                 
                 answer_count++;
                 
@@ -4123,7 +4142,8 @@ static void tl_net_command_vehicle_data_query(TLNetData *net_data,
             {
                 u8_value = 8;
                 g_byte_array_append(packet, &u8_value, 1);
-                g_byte_array_append(packet, (const guint8 *)"10000", 5);
+                g_byte_array_append(packet, (const guint8 *)
+                    net_data->fwversion, 5);
                 
                 answer_count++;
                 
@@ -4758,6 +4778,188 @@ static void tl_net_command_vehicle_setup(TLNetData *net_data,
     }
 }
 
+static void tl_net_command_terminal_update(TLNetData *net_data,
+    const guint8 *payload, guint payload_len)
+{
+    gchar *url = NULL;
+    gchar *apn = NULL;
+    gchar *user = NULL;
+    gchar *password = NULL;
+    gchar address[7] = {0};
+    guint16 port;
+    gchar factory_code[5] = {0};
+    gchar hwversion[6] = {0};
+    gchar fwversion[6] = {0};
+    guint i;
+    guint used_len = 0;
+    guint16 timeout = 0;
+    gchar *url_scheme = NULL;
+    GError *error = NULL;
+    GDateTime *dt;
+    gint64 timestamp;
+    FILE *fp;
+    
+    /* URL;APN;USER;PASS;ADDR;PORT;FCODE;HWVER;FWVER;TIMEOUT */
+    
+    for(i=0;i<payload_len;i++)
+    {
+        if(payload[i]==';')
+        {
+            url = g_strndup((const gchar *)payload, i);
+            i++;
+            used_len = i;
+            break;
+        }
+    }
+    
+    for(i=used_len;i<payload_len;i++)
+    {
+        if(payload[i]==';')
+        {
+            apn = g_strndup((const gchar *)payload+used_len, i-used_len);
+            i++;
+            used_len = i;
+            break;
+        }
+    }
+    
+    for(i=used_len;i<payload_len;i++)
+    {
+        if(payload[i]==';')
+        {
+            user = g_strndup((const gchar *)payload+used_len, i-used_len);
+            i++;
+            used_len = i;
+            break;
+        }
+    }
+    
+    for(i=used_len;i<payload_len;i++)
+    {
+        if(payload[i]==';')
+        {
+            password = g_strndup((const gchar *)payload+used_len, i-used_len);
+            i++;
+            used_len = i;
+            break;
+        }
+    }
+    
+    if(used_len+7 <= payload_len)
+    {
+        memcpy(address, payload+used_len, 6);
+    }
+    used_len += 7;
+    
+    if(used_len+3 <= payload_len)
+    {
+        memcpy(&port, payload+used_len, 2);
+        port = g_ntohs(port);
+    }
+    used_len += 3;
+    
+    if(used_len+5 <= payload_len)
+    {
+        memcpy(factory_code, payload+used_len, 4);
+    }
+    used_len += 5;
+    
+    if(used_len+6 <= payload_len)
+    {
+        memcpy(hwversion, payload+used_len, 5);
+    }
+    used_len += 6;
+    
+    if(used_len+6 <= payload_len)
+    {
+        memcpy(fwversion, payload+used_len, 5);
+    }
+    used_len += 6;
+    
+    if(used_len+2 <= payload_len)
+    {
+        memcpy(&timeout, payload+used_len, 2);
+        timeout = g_ntohs(timeout);
+    }
+    
+    g_message("Got update request, URL %s, address %02X:%02X:%02X:%02X:"
+        "%02X:%02X, port %u, APN %s, user %s, password %s.", url, address[0],
+        address[1], address[2], address[3], address[4], address[5], port,
+        apn, user, password);
+    
+    if(url!=NULL)
+    {
+        url_scheme = g_uri_parse_scheme(url);
+        if(url_scheme==NULL || g_ascii_strcasecmp(url_scheme, "http")!=0 ||
+            g_ascii_strcasecmp(url_scheme, "https")!=0 ||
+            g_ascii_strcasecmp(url_scheme, "ftp")!=0)
+        {
+            g_free(url);
+            url = NULL;
+        }
+        g_free(url_scheme);
+    }
+    
+    dt = g_date_time_new_now_local();
+    timestamp = g_date_time_to_unix(dt);
+    g_date_time_unref(dt);
+    
+    fp = fopen("/var/lib/tbox/conf/tl-update.conf", "w");
+    if(fp!=NULL)
+    {
+        fprintf(fp, "TIMESTAMP=%"G_GINT64_FORMAT"\n", timestamp);
+        
+        if(url!=NULL && strlen(url)>0)
+        {
+            fprintf(fp, "URL=%s\n", url);
+        }
+        
+        if(apn!=NULL && strlen(apn)>0)
+        {
+            fprintf(fp, "APN=%s\n", apn);
+        }
+        
+        if(user!=NULL && strlen(user)>0)
+        {
+            fprintf(fp, "USER=%s\n", user);
+        }
+        
+        if(password!=NULL && strlen(password)>0)
+        {
+            fprintf(fp, "PASSWORD=%s\n", password);
+        }
+        
+        if(address[0]==0 && address[1]==0)
+        {
+            fprintf(fp, "HOST=%u.%u.%u.%u\n", address[2], address[3],
+                address[4], address[5]);
+        }
+        else
+        {
+            fprintf(fp, "HOST=%6s\n", address);
+        }
+        
+        fprintf(fp, "PORT=%u\n", port);
+        fprintf(fp, "FACTORYCODE=%s\n", factory_code);
+        fprintf(fp, "HWVERSION=%s\n", hwversion);
+        fprintf(fp, "FWVERSION=%s\n", fwversion);
+        fprintf(fp, "TIMEOUT=%u\n", timeout);
+        
+        fclose(fp);
+    }
+   
+    if(!g_spawn_command_line_async("/usr/bin/tl-update", &error))
+    {
+        g_warning("TLNet failed to update!");
+        g_clear_error(&error);
+    }
+    
+    g_free(url);
+    g_free(apn);
+    g_free(user);
+    g_free(password);
+}
+
 static void tl_net_command_terminal_control(TLNetData *net_data,
     const guint8 *payload, guint payload_len)
 {
@@ -4776,13 +4978,7 @@ static void tl_net_command_terminal_control(TLNetData *net_data,
     {
         case 1:
         {
-            /* URL;APN;USER;PASS;ADDR;PORT;CODE;HWVER;FWVER;TIMEOUT */
-            
-            if(!g_spawn_command_line_async("/usr/bin/tl-update", &error))
-            {
-                g_warning("TLNet failed to update!");
-                g_clear_error(&error);
-            }
+            tl_net_command_terminal_update(net_data, payload, payload_len);
             break;
         }
         case 2:
