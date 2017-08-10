@@ -8,10 +8,7 @@ src/.deps
 /src/iccid-fetch
 /src/tbox-logger
 /stamp-h1
-/ffmpeg/config.log
-/ffmpeg/config.mak
-/ffmpeg/doc/config.texi
-/ffmpeg/.config
+/update/update.*
 /config.log
 /autom4te.cache/output.0
 /autom4te.cache/output.1
