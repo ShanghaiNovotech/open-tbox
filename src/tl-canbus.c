@@ -11,6 +11,8 @@
 #include "tl-canbus.h"
 #include "tl-parser.h"
 
+#define TL_CANBUS_NO_DATA_TIMEOUT 180
+
 typedef struct _TLCANBusSocketData
 {
     gchar *device;
@@ -23,6 +25,7 @@ typedef struct _TLCANBusData
 {
     gboolean initialized;
     GHashTable *socket_table;
+    gint64 data_timestamp;
 }TLCANBusData;
 
 static TLCANBusData g_tl_canbus_data = {0};
@@ -200,6 +203,7 @@ gboolean tl_canbus_init()
     
     g_slist_free_full(device_list, g_free);
     
+    g_tl_canbus_data.data_timestamp = g_get_monotonic_time();
     g_tl_canbus_data.initialized = TRUE;
     
     return TRUE;

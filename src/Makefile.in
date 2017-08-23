@@ -120,7 +120,8 @@ iccid_fetch_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 am_tbox_logger_OBJECTS = tbox_logger-main.$(OBJEXT) \
 	tbox_logger-tl-canbus.$(OBJEXT) tbox_logger-tl-net.$(OBJEXT) \
 	tbox_logger-tl-logger.$(OBJEXT) \
-	tbox_logger-tl-parser.$(OBJEXT) tbox_logger-tl-gps.$(OBJEXT)
+	tbox_logger-tl-parser.$(OBJEXT) tbox_logger-tl-gps.$(OBJEXT) \
+	tbox_logger-tl-serial.$(OBJEXT)
 tbox_logger_OBJECTS = $(am_tbox_logger_OBJECTS)
 tbox_logger_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(tbox_logger_CFLAGS) \
@@ -319,12 +320,14 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-noinst_HEADERS = tl-canbus.h tl-net.h tl-logger.h tl-parser.h tl-gps.h
+noinst_HEADERS = tl-canbus.h tl-net.h tl-logger.h tl-parser.h tl-gps.h \
+    tl-serial.h
+
 tbox_logger_CFLAGS = @GLIB2_CFLAGS@ @JSONC_CFLAGS@ @LIBGPS_CFLAGS@ \
 	-DPREFIXDIR=\"$(prefix)\" $(am__append_1)
 tbox_logger_DEPENDENCIES = @LIBOBJS@
 tbox_logger_SOURCES = main.c tl-canbus.c tl-net.c tl-logger.c tl-parser.c \
-    tl-gps.c
+    tl-gps.c tl-serial.c
 
 tbox_logger_LDFLAGS = -export-dynamic -no-undefined \
     -export-symbols-regex "^[[^_]].*"
@@ -442,6 +445,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tbox_logger-tl-logger.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tbox_logger-tl-net.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tbox_logger-tl-parser.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tbox_logger-tl-serial.Po@am__quote@
 
 .c.o:
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
@@ -561,6 +565,20 @@ tbox_logger-tl-gps.obj: tl-gps.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tl-gps.c' object='tbox_logger-tl-gps.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(tbox_logger_CFLAGS) $(CFLAGS) -c -o tbox_logger-tl-gps.obj `if test -f 'tl-gps.c'; then $(CYGPATH_W) 'tl-gps.c'; else $(CYGPATH_W) '$(srcdir)/tl-gps.c'; fi`
+
+tbox_logger-tl-serial.o: tl-serial.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(tbox_logger_CFLAGS) $(CFLAGS) -MT tbox_logger-tl-serial.o -MD -MP -MF $(DEPDIR)/tbox_logger-tl-serial.Tpo -c -o tbox_logger-tl-serial.o `test -f 'tl-serial.c' || echo '$(srcdir)/'`tl-serial.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/tbox_logger-tl-serial.Tpo $(DEPDIR)/tbox_logger-tl-serial.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tl-serial.c' object='tbox_logger-tl-serial.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(tbox_logger_CFLAGS) $(CFLAGS) -c -o tbox_logger-tl-serial.o `test -f 'tl-serial.c' || echo '$(srcdir)/'`tl-serial.c
+
+tbox_logger-tl-serial.obj: tl-serial.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(tbox_logger_CFLAGS) $(CFLAGS) -MT tbox_logger-tl-serial.obj -MD -MP -MF $(DEPDIR)/tbox_logger-tl-serial.Tpo -c -o tbox_logger-tl-serial.obj `if test -f 'tl-serial.c'; then $(CYGPATH_W) 'tl-serial.c'; else $(CYGPATH_W) '$(srcdir)/tl-serial.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/tbox_logger-tl-serial.Tpo $(DEPDIR)/tbox_logger-tl-serial.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tl-serial.c' object='tbox_logger-tl-serial.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(tbox_logger_CFLAGS) $(CFLAGS) -c -o tbox_logger-tl-serial.obj `if test -f 'tl-serial.c'; then $(CYGPATH_W) 'tl-serial.c'; else $(CYGPATH_W) '$(srcdir)/tl-serial.c'; fi`
 
 mostlyclean-libtool:
 	-rm -f *.lo

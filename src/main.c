@@ -6,6 +6,7 @@
 #include "tl-net.h"
 #include "tl-parser.h"
 #include "tl-gps.h"
+#include "tl-serial.h"
 
 static GMainLoop *g_tl_main_loop = NULL;
 static gboolean g_tl_main_cmd_daemon = FALSE;
@@ -15,6 +16,7 @@ static gchar *g_tl_main_cmd_vin_code = NULL;
 static gchar *g_tl_main_cmd_iccid_code = NULL;
 static gchar *g_tl_main_cmd_fallback_vehicle_server_host = NULL;
 static gint g_tl_main_cmd_fallback_vehicle_server_port = 0;
+static gchar *g_tl_main_cmd_serial_port = NULL;
 
 static GOptionEntry g_tl_main_cmd_entries[] =
 {
@@ -34,6 +36,8 @@ static GOptionEntry g_tl_main_cmd_entries[] =
     { "fallback-vehicle-server-port", 0, 0, G_OPTION_ARG_INT,
         &g_tl_main_cmd_fallback_vehicle_server_port,
         "Set fallback vehicle server port", NULL },
+    { "stm-serial-port", 0, 0, G_OPTION_ARG_STRING, &g_tl_main_cmd_serial_port,
+        "Set STM8 connection serial port", NULL },
     { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL, NULL }
 };
 
@@ -43,6 +47,7 @@ int main(int argc, char *argv[])
     GOptionContext *context;
     const gchar *conf_file_path;
     const gchar *log_file_path;
+    const gchar *serial_port;
     gchar *parse_file_path;
     
     context = g_option_context_new("- TBox Logger");
@@ -92,6 +97,15 @@ int main(int argc, char *argv[])
         log_file_path = "/var/lib/tbox/log";
     }
     
+    if(g_tl_main_cmd_serial_port!=NULL)
+    {
+        serial_port = g_tl_main_cmd_serial_port;
+    }
+    else
+    {
+        serial_port = "/dev/ttymxc3";
+    }
+    
     if(!tl_logger_init(log_file_path))
     {
         g_error("Cannot initialize logger!");
@@ -123,6 +137,11 @@ int main(int argc, char *argv[])
         g_warning("Cannot initialize net module! Data may not be uploaded.");
     }
     
+    if(!tl_serial_init(serial_port))
+    {
+        g_warning("Cannot initialize serial port for STM8!");
+    }
+    
     parse_file_path = g_build_filename(conf_file_path, "tboxparse.xml", NULL);
     tl_parser_load_parse_file(parse_file_path);
     g_free(parse_file_path);
@@ -135,6 +154,10 @@ int main(int argc, char *argv[])
     tl_canbus_uninit();
     tl_parser_uninit();
     tl_logger_uninit();
+    
+    
+    
+    tl_serial_uninit();
     
     return 0;
 }
