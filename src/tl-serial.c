@@ -13,6 +13,7 @@
 #define TL_SERIAL_READ_BUFFER_SIZE 512
 
 #define TL_SERIAL_RETRY_TIMEOUT 5
+#define TL_SERIAL_HEARTBEAT_TIMEOUT 5
 
 typedef struct _TLSerialWriteData
 {
@@ -166,6 +167,11 @@ static void tl_serial_write_data_request(TLSerialData *serial_data,
         return;
     }
     
+    if(payload==NULL)
+    {
+        length = 0;
+    }
+    
     packet = g_byte_array_new();
     g_byte_array_append(packet, header, 3);
     
@@ -230,6 +236,7 @@ static void tl_serial_data_parse(TLSerialData *serial_data)
         }
     }
     
+    g_message("TLSerial got command %u.", command);
     
     
     
@@ -326,6 +333,12 @@ static gboolean tl_serial_read_io_watch_cb(GIOChannel *source,
     return TRUE;
 }
 
+static void tl_serial_heartbeat_request(TLSerialData *serial_data)
+{
+    tl_serial_write_data_request(serial_data, 1, NULL, 0, FALSE);
+    serial_data->heartbeat_timestamp = g_get_monotonic_time();
+}
+
 static gboolean tl_serial_check_timeout_cb(gpointer user_data)
 {
     TLSerialData *serial_data = (TLSerialData *)user_data;
@@ -363,8 +376,15 @@ static gboolean tl_serial_check_timeout_cb(gpointer user_data)
             tl_serial_write_io_watch_cb, serial_data);
     }
     
-    //TODO: Heartbeat.
-    
+    if(g_queue_is_empty(serial_data->write_queue))
+    {
+        now = g_get_monotonic_time();
+        if(serial_data->heartbeat_timestamp - now >
+            (gint64)TL_SERIAL_HEARTBEAT_TIMEOUT * 1e6)
+        {
+            tl_serial_heartbeat_request(serial_data);
+        }
+    }
     
     return TRUE;
 }
@@ -382,7 +402,7 @@ gboolean tl_serial_init(const gchar *port)
     }
     
     signal(SIGPIPE, SIG_IGN);
-    fd = open(port, O_RDONLY | O_NOCTTY | O_NDELAY);
+    fd = open(port, O_RDWR | O_NOCTTY | O_NDELAY);
     if(fd<0)
     {
         g_warning("TLSerial cannot open serial port: %s", strerror(errno));
@@ -434,6 +454,10 @@ gboolean tl_serial_init(const gchar *port)
     
     g_tl_serial_data.check_timeout_id = 
         g_timeout_add(100, tl_serial_check_timeout_cb, &g_tl_serial_data);
+        
+        
+    tl_serial_heartbeat_request(&g_tl_serial_data);
+        
     return TRUE;
 }
 
