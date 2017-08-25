@@ -1,6 +1,7 @@
 #include <unistd.h>
 #include <glib.h>
 
+#include "tl-main.h"
 #include "tl-logger.h"
 #include "tl-canbus.h"
 #include "tl-net.h"
@@ -17,6 +18,7 @@ static gchar *g_tl_main_cmd_iccid_code = NULL;
 static gchar *g_tl_main_cmd_fallback_vehicle_server_host = NULL;
 static gint g_tl_main_cmd_fallback_vehicle_server_port = 0;
 static gchar *g_tl_main_cmd_serial_port = NULL;
+static gboolean g_tl_main_cmd_shutdown = FALSE;
 
 static GOptionEntry g_tl_main_cmd_entries[] =
 {
@@ -40,6 +42,16 @@ static GOptionEntry g_tl_main_cmd_entries[] =
         "Set STM8 connection serial port", NULL },
     { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL, NULL }
 };
+
+
+static gboolean tl_main_shutdown_request_timeout(gpointer user_data)
+{
+    g_warning("Serial port waiting timeout, start to shutdown!");
+    
+    tl_main_shutdown();
+    
+    return FALSE;
+}
 
 int main(int argc, char *argv[])
 {
@@ -155,9 +167,35 @@ int main(int argc, char *argv[])
     tl_parser_uninit();
     tl_logger_uninit();
     
-    
-    
     tl_serial_uninit();
     
+    if(g_tl_main_cmd_shutdown)
+    {
+        g_spawn_command_line_async("/sbin/poweroff", NULL);
+    }
+    
     return 0;
+}
+
+void tl_main_request_shutdown()
+{
+    g_message("Prepare to shutdown.");
+    
+    tl_net_uninit();
+    tl_gps_uninit();
+    tl_canbus_uninit();
+    tl_parser_uninit();
+    tl_logger_uninit();
+    
+    sync();
+    
+    tl_serial_request_shutdown();
+    
+    g_timeout_add_seconds(180, tl_main_shutdown_request_timeout, NULL);
+}
+
+void tl_main_shutdown()
+{
+    g_main_loop_quit(g_tl_main_loop);
+    g_tl_main_cmd_shutdown = TRUE;
 }

@@ -1,7 +1,7 @@
 bin_PROGRAMS=tbox-logger iccid-fetch
 
-noinst_HEADERS=tl-canbus.h tl-net.h tl-logger.h tl-parser.h tl-gps.h \
-    tl-serial.h
+noinst_HEADERS=tl-main.h tl-canbus.h tl-net.h tl-logger.h tl-parser.h \
+    tl-gps.h tl-serial.h
 
 tbox_logger_CFLAGS=@GLIB2_CFLAGS@ @JSONC_CFLAGS@ @LIBGPS_CFLAGS@ \
     -DPREFIXDIR=\"$(prefix)\"

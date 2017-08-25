@@ -8,12 +8,14 @@
 #include <signal.h>
 
 #include "tl-serial.h"
+#include "tl-main.h"
 
 #define TL_SERIAL_WRITE_RETRY_MAXIUM 3
 #define TL_SERIAL_READ_BUFFER_SIZE 512
 
 #define TL_SERIAL_RETRY_TIMEOUT 5
 #define TL_SERIAL_HEARTBEAT_TIMEOUT 5
+#define TL_SERIAL_TIME_SYNC_TIMEOUT 120
 
 typedef struct _TLSerialWriteData
 {
@@ -41,6 +43,11 @@ typedef struct _TLSerialData
     guint write_watch_id;
     
     gint64 heartbeat_timestamp;
+    gint64 time_sync_timestamp;
+    
+    gboolean time_sync_finished;
+    
+    gboolean low_voltage_shutdown;
     
     guint check_timeout_id;
 }TLSerialData;
@@ -160,6 +167,7 @@ static void tl_serial_write_data_request(TLSerialData *serial_data,
     guint8 header[3] = {0xA5, 0x0, 0x0};
     guint8 tail[1] = {0x5A};
     guint8 checksum = 0;
+    guint8 ack = need_ack ? 1 : 0;
     guint i;
     
     if(serial_data==NULL)
@@ -175,13 +183,15 @@ static void tl_serial_write_data_request(TLSerialData *serial_data,
     packet = g_byte_array_new();
     g_byte_array_append(packet, header, 3);
     
-    packet->data[1] = length + 1;
+    packet->data[1] = length + 2;
     packet->data[2] = command;
     
     if(length>0)
     {
         g_byte_array_append(packet, payload, length);
     }
+    
+    g_byte_array_append(packet, &ack, 1);
     
     for(i=0;i<packet->len;i++)
     {
@@ -206,21 +216,24 @@ static void tl_serial_write_data_request(TLSerialData *serial_data,
 static void tl_serial_data_parse(TLSerialData *serial_data)
 {
     guint8 command;
+    guint8 result;
     
     if(serial_data==NULL)
     {
         return;
     }
     
-    if(serial_data->read_size < 3)
+    if(serial_data->read_size < 5)
     {
         return;
     }
     
     command = serial_data->read_buffer[2];
+    result = serial_data->read_buffer[3];
     
     if(serial_data->write_data!=NULL &&
-        serial_data->write_data->command==command)
+        serial_data->write_data->command==command &&
+        result==0)
     {
         if(serial_data->write_watch_id==0)
         {
@@ -238,7 +251,35 @@ static void tl_serial_data_parse(TLSerialData *serial_data)
     
     g_message("TLSerial got command %u.", command);
     
-    
+    switch(command)
+    {
+        case 4:
+        case 8:
+        {
+            tl_main_shutdown();
+            break;
+        }
+        case 5:
+        {
+            serial_data->low_voltage_shutdown = TRUE;
+            tl_main_request_shutdown();
+            break;
+        }
+        case 10:
+        {
+            if(result==0)
+            {
+                g_message("TLSerial STM8 RTC clock sync finished.");
+                serial_data->time_sync_finished = TRUE;
+            }
+            
+            break;
+        }
+        default:
+        {
+            break;
+        }
+    }
     
 }
 
@@ -271,7 +312,7 @@ static gboolean tl_serial_read_io_watch_cb(GIOChannel *source,
                             buffer[i];
                         serial_data->read_size++;
                         
-                        if(serial_data->read_expect_size+4 >=
+                        if(serial_data->read_expect_size+4 <=
                             serial_data->read_size)
                         {
                             G_STMT_START
@@ -324,6 +365,7 @@ static gboolean tl_serial_read_io_watch_cb(GIOChannel *source,
                     {
                         serial_data->read_buffer[0] = 0xA5;
                         serial_data->read_size = 1;
+                        serial_data->read_expect_size = 0;
                     }
                 }
             }
@@ -337,6 +379,38 @@ static void tl_serial_heartbeat_request(TLSerialData *serial_data)
 {
     tl_serial_write_data_request(serial_data, 1, NULL, 0, FALSE);
     serial_data->heartbeat_timestamp = g_get_monotonic_time();
+}
+
+static void tl_serial_time_sync_request(TLSerialData *serial_data)
+{
+    GDateTime *datetime;
+    guint8 buffer[7];
+    
+    if(serial_data->time_sync_finished)
+    {
+        return;
+    }
+    
+    datetime = g_date_time_new_now_local();
+    
+    if(g_date_time_get_year(datetime)<2017)
+    {
+        g_date_time_unref(datetime);
+        return;
+    }
+    
+    buffer[0] = (g_date_time_get_year(datetime) - 2000);
+    buffer[1] = g_date_time_get_month(datetime);
+    buffer[2] = g_date_time_get_day_of_month(datetime);
+    buffer[3] = g_date_time_get_day_of_week(datetime);
+    buffer[4] = g_date_time_get_hour(datetime);
+    buffer[5] = g_date_time_get_minute(datetime);
+    buffer[6] = g_date_time_get_second(datetime);
+    
+    tl_serial_write_data_request(serial_data, 9, buffer, 7, TRUE);
+    serial_data->time_sync_timestamp = g_get_monotonic_time();
+    
+    g_date_time_unref(datetime);
 }
 
 static gboolean tl_serial_check_timeout_cb(gpointer user_data)
@@ -379,10 +453,17 @@ static gboolean tl_serial_check_timeout_cb(gpointer user_data)
     if(g_queue_is_empty(serial_data->write_queue))
     {
         now = g_get_monotonic_time();
-        if(serial_data->heartbeat_timestamp - now >
+        if(now - serial_data->heartbeat_timestamp >
             (gint64)TL_SERIAL_HEARTBEAT_TIMEOUT * 1e6)
         {
             tl_serial_heartbeat_request(serial_data);
+        }
+        
+        if(!serial_data->time_sync_finished &&
+            now - serial_data->time_sync_timestamp >
+            (gint64)TL_SERIAL_TIME_SYNC_TIMEOUT * 1e6)
+        {
+            tl_serial_time_sync_request(serial_data);
         }
     }
     
@@ -457,6 +538,7 @@ gboolean tl_serial_init(const gchar *port)
         
         
     tl_serial_heartbeat_request(&g_tl_serial_data);
+    tl_serial_time_sync_request(&g_tl_serial_data);
         
     return TRUE;
 }
@@ -511,4 +593,21 @@ void tl_serial_uninit()
     }
     
     g_tl_serial_data.initialized = FALSE;
+}
+
+void tl_serial_request_shutdown()
+{
+    if(!g_tl_serial_data.initialized)
+    {
+        return;
+    }
+    
+    if(g_tl_serial_data.low_voltage_shutdown)
+    {
+        tl_serial_write_data_request(&g_tl_serial_data, 7, NULL, 0, TRUE);
+    }
+    else
+    {
+        tl_serial_write_data_request(&g_tl_serial_data, 3, NULL, 0, TRUE);
+    }
 }

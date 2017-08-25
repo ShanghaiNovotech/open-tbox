@@ -10,6 +10,8 @@
 #include <linux/can/raw.h>
 #include "tl-canbus.h"
 #include "tl-parser.h"
+#include "tl-serial.h"
+#include "tl-main.h"
 
 #define TL_CANBUS_NO_DATA_TIMEOUT 180
 
@@ -26,6 +28,7 @@ typedef struct _TLCANBusData
     gboolean initialized;
     GHashTable *socket_table;
     gint64 data_timestamp;
+    guint check_timeout_id;
 }TLCANBusData;
 
 static TLCANBusData g_tl_canbus_data = {0};
@@ -72,6 +75,8 @@ static gboolean tl_canbus_socket_io_channel_watch(GIOChannel *source,
             {
                 tl_parser_parse_can_data(socket_data->device,
                     frame.can_id, frame.data, frame.len);
+                    
+                g_tl_canbus_data.data_timestamp = g_get_monotonic_time();
             }
             else
             {
@@ -176,6 +181,28 @@ static GSList *tl_canbus_scan_devices()
     return device_list;
 }
 
+static gboolean tl_canbus_check_timeout_cb(gpointer user_data)
+{
+    TLCANBusData *canbus_data = (TLCANBusData *)user_data;
+    gint64 now;
+    
+    if(user_data==NULL)
+    {
+        return FALSE;
+    }
+    
+    now = g_get_monotonic_time();
+    
+    if(now - canbus_data->data_timestamp > (gint64)TL_CANBUS_NO_DATA_TIMEOUT)
+    {
+        g_message("TLCANBus no CANBus data received for 3min, "
+            "start to shutdown.");
+        tl_main_request_shutdown();
+    }
+    
+    return TRUE;
+}
+
 gboolean tl_canbus_init()
 {
     GSList *device_list, *list_foreach;
@@ -206,6 +233,9 @@ gboolean tl_canbus_init()
     g_tl_canbus_data.data_timestamp = g_get_monotonic_time();
     g_tl_canbus_data.initialized = TRUE;
     
+    g_tl_canbus_data.check_timeout_id = g_timeout_add_seconds(5,
+        tl_canbus_check_timeout_cb, &g_tl_canbus_data);
+    
     return TRUE;
 }
 
@@ -214,6 +244,12 @@ void tl_canbus_uninit()
     if(!g_tl_canbus_data.initialized)
     {
         return;
+    }
+    
+    if(g_tl_canbus_data.check_timeout_id>0)
+    {
+        g_source_remove(g_tl_canbus_data.check_timeout_id);
+        g_tl_canbus_data.check_timeout_id = 0;
     }
     
     if(g_tl_canbus_data.socket_table!=NULL)

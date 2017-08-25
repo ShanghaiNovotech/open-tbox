@@ -6,4 +6,6 @@
 gboolean tl_serial_init(const gchar *port);
 void tl_serial_uninit();
 
+void tl_serial_request_shutdown();
+
 #endif

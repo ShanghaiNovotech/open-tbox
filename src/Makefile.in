@@ -320,8 +320,8 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-noinst_HEADERS = tl-canbus.h tl-net.h tl-logger.h tl-parser.h tl-gps.h \
-    tl-serial.h
+noinst_HEADERS = tl-main.h tl-canbus.h tl-net.h tl-logger.h tl-parser.h \
+    tl-gps.h tl-serial.h
 
 tbox_logger_CFLAGS = @GLIB2_CFLAGS@ @JSONC_CFLAGS@ @LIBGPS_CFLAGS@ \
 	-DPREFIXDIR=\"$(prefix)\" $(am__append_1)
