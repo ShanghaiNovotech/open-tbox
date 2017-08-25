@@ -141,7 +141,7 @@ static gboolean tl_serial_write_io_watch_cb(GIOChannel *source,
                 }
             }
             
-            if(rsize<=0 && errno==EAGAIN)
+            if(rsize<=0)
             {
                 break;
             }
@@ -232,7 +232,7 @@ static void tl_serial_data_parse(TLSerialData *serial_data)
     result = serial_data->read_buffer[3];
     
     if(serial_data->write_data!=NULL &&
-        serial_data->write_data->command==command &&
+        (serial_data->write_data->command/2==command/2) &&
         result==0)
     {
         if(serial_data->write_watch_id==0)

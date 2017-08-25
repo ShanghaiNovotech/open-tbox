@@ -193,7 +193,8 @@ static gboolean tl_canbus_check_timeout_cb(gpointer user_data)
     
     now = g_get_monotonic_time();
     
-    if(now - canbus_data->data_timestamp > (gint64)TL_CANBUS_NO_DATA_TIMEOUT)
+    if(now - canbus_data->data_timestamp >
+        (gint64)TL_CANBUS_NO_DATA_TIMEOUT * 1e6)
     {
         g_message("TLCANBus no CANBus data received for 3min, "
             "start to shutdown.");
