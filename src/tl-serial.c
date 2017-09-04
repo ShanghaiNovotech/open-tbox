@@ -232,7 +232,7 @@ static void tl_serial_data_parse(TLSerialData *serial_data)
     result = serial_data->read_buffer[3];
     
     if(serial_data->write_data!=NULL &&
-        (serial_data->write_data->command/2==command/2) &&
+        (serial_data->write_data->command+1)/2==(command+1)/2 &&
         result==0)
     {
         if(serial_data->write_watch_id==0)
@@ -272,6 +272,21 @@ static void tl_serial_data_parse(TLSerialData *serial_data)
                 g_message("TLSerial STM8 RTC clock sync finished.");
                 serial_data->time_sync_finished = TRUE;
             }
+            
+            break;
+        }
+        case 19:
+        {
+            gint16 x, y, z;
+            
+            memcpy(&x, serial_data->read_buffer + 3, 2);
+            x = g_ntohs(x);
+            memcpy(&y, serial_data->read_buffer + 5, 2);
+            y = g_ntohs(y);
+            memcpy(&z, serial_data->read_buffer + 7, 2);
+            z = g_ntohs(z);
+            
+            g_message("Acceleration changed, x=%hd, y=%hd, z=%hd", x, y, z);
             
             break;
         }
@@ -476,6 +491,9 @@ gboolean tl_serial_init(const gchar *port)
     GIOChannel *channel;
     struct termios options;
     
+    GDateTime *dt;
+    gint y, m, d;
+    
     if(g_tl_serial_data.initialized)
     {
         g_warning("TLSerial already initialized!");
@@ -539,6 +557,22 @@ gboolean tl_serial_init(const gchar *port)
         
     tl_serial_heartbeat_request(&g_tl_serial_data);
     tl_serial_time_sync_request(&g_tl_serial_data);
+    
+    
+    
+    tl_serial_gravity_threshold_set(60);
+    
+    dt = g_date_time_new_now_local();
+    g_date_time_get_ymd(dt, &y, &m, &d);
+    if(g_date_time_get_hour(dt)>=4)
+    {
+        d++;
+    }
+    g_date_time_unref(dt);
+    dt = g_date_time_new_local(y, m, d, 4, 0, 0);
+    tl_serial_power_on_time_set(g_date_time_to_unix(dt));
+    g_date_time_unref(dt);
+    
         
     return TRUE;
 }
@@ -610,4 +644,35 @@ void tl_serial_request_shutdown()
     {
         tl_serial_write_data_request(&g_tl_serial_data, 3, NULL, 0, TRUE);
     }
+}
+
+void tl_serial_power_on_time_set(gint64 time)
+{
+    GDateTime *datetime;
+    guint8 buffer[7];
+    
+    if(!g_tl_serial_data.initialized)
+    {
+        return;
+    }
+    
+    datetime = g_date_time_new_from_unix_local(time);
+    
+    buffer[0] = (g_date_time_get_year(datetime) - 2000);
+    buffer[1] = g_date_time_get_month(datetime);
+    buffer[2] = g_date_time_get_day_of_month(datetime);
+    buffer[3] = g_date_time_get_day_of_week(datetime);
+    buffer[4] = g_date_time_get_hour(datetime);
+    buffer[5] = g_date_time_get_minute(datetime);
+    buffer[6] = g_date_time_get_second(datetime);
+    
+    tl_serial_write_data_request(&g_tl_serial_data, 11, buffer, 7, TRUE);
+    
+    g_date_time_unref(datetime);
+    
+}
+
+void tl_serial_gravity_threshold_set(guint8 threshold)
+{    
+    tl_serial_write_data_request(&g_tl_serial_data, 15, &threshold, 1, TRUE);
 }
