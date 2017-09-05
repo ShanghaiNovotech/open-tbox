@@ -52,6 +52,7 @@ typedef struct _TLSerialData
     gboolean alarm_clock_enabled;
     gint64 alarm_clock_time;
     gint daily_alarm_clock_hour;
+    gint daily_alarm_clock_min;
     guint8 gravity_threshold;
     
     guint check_timeout_id;
@@ -494,7 +495,8 @@ static gboolean tl_serial_check_timeout_cb(gpointer user_data)
         dt = g_date_time_new_now_local();
         if(g_date_time_to_unix(dt) > serial_data->alarm_clock_time)
         {
-            tl_serial_power_on_daily_set(serial_data->daily_alarm_clock_hour);
+            tl_serial_power_on_daily_set(serial_data->daily_alarm_clock_hour,
+                serial_data->daily_alarm_clock_min);
         }
         g_date_time_unref(dt);
     }
@@ -687,7 +689,7 @@ void tl_serial_power_on_time_set(gint64 time)
     
 }
 
-void tl_serial_power_on_daily_set(gint hour)
+void tl_serial_power_on_daily_set(gint hour, gint minute)
 {
     GDateTime *dt;
     gint y, m, d;
@@ -698,15 +700,17 @@ void tl_serial_power_on_daily_set(gint hour)
     }
     
     g_tl_serial_data.daily_alarm_clock_hour = hour;
+    g_tl_serial_data.daily_alarm_clock_min = minute;
     
     dt = g_date_time_new_now_local();
     g_date_time_get_ymd(dt, &y, &m, &d);
-    if(g_date_time_get_hour(dt)>=hour)
+    if(g_date_time_get_hour(dt) * 60 + g_date_time_get_minute(dt) >=
+        hour*60+minute)
     {
         d++;
     }
     g_date_time_unref(dt);
-    dt = g_date_time_new_local(y, m, d, hour, 0, 0);
+    dt = g_date_time_new_local(y, m, d, hour, minute, 0);
     tl_serial_power_on_time_set(g_date_time_to_unix(dt));
     g_date_time_unref(dt);
 }

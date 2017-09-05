@@ -250,7 +250,7 @@ static gboolean tl_net_config_load(TLNetData *net_data,
     GKeyFile *keyfile;
     GError *error = NULL;
     const gchar *svalue;
-    gint ivalue;
+    gint ivalue, h, m;
     guint i;
     gchar server_key[16] = {0};
     
@@ -336,11 +336,18 @@ static gboolean tl_net_config_load(TLNetData *net_data,
     
     if(g_key_file_has_key(keyfile, "Config", "DailyAlarmClock", NULL))
     {
-        ivalue = g_key_file_get_integer(keyfile, "Config",
-            "DailyAlarmClock", NULL);
-        if(ivalue>=0 && ivalue<=23)
+        h = g_key_file_get_integer(keyfile, "Config",
+            "DailyAlarmClockHour", NULL);
+        m = g_key_file_get_integer(keyfile, "Config",
+            "DailyAlarmClockMinute", NULL);
+        if(m<0 || m>=60)
         {
-            tl_serial_power_on_daily_set(ivalue);
+            m = 0;
+        }
+            
+        if(h>=0 && h<=23)
+        {
+            tl_serial_power_on_daily_set(h, m);
         }
     }
     
