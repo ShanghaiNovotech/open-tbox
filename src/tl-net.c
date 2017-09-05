@@ -334,7 +334,7 @@ static gboolean tl_net_config_load(TLNetData *net_data,
         }
     }
     
-    if(g_key_file_has_key(keyfile, "Config", "DailyAlarmClock", NULL))
+    if(g_key_file_has_key(keyfile, "Config", "DailyAlarmClockHour", NULL))
     {
         h = g_key_file_get_integer(keyfile, "Config",
             "DailyAlarmClockHour", NULL);
