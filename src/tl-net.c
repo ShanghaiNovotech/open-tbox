@@ -6,6 +6,7 @@
 #include "tl-logger.h"
 #include "tl-parser.h"
 #include "tl-gps.h"
+#include "tl-serial.h"
 
 #define TL_NET_BACKLOG_MAXIMUM 45
 #define TL_NET_LOG_TO_DISK_TRIGGER 2048
@@ -324,6 +325,26 @@ static gboolean tl_net_config_load(TLNetData *net_data,
     }
     
     g_key_file_free(keyfile);
+    
+    if(g_key_file_has_key(keyfile, "Config", "GravityThreshold", NULL))
+    {
+        ivalue = g_key_file_get_integer(keyfile, "Config",
+            "GravityThreshold", NULL);
+        if(ivalue>=0 && ivalue<=100)
+        {
+            tl_serial_gravity_threshold_set(ivalue);
+        }
+    }
+    
+    if(g_key_file_has_key(keyfile, "Config", "DailyAlarmClock", NULL))
+    {
+        ivalue = g_key_file_get_integer(keyfile, "Config",
+            "DailyAlarmClock", NULL);
+        if(ivalue>=0 && ivalue<=23)
+        {
+            tl_serial_power_on_daily_set(ivalue);
+        }
+    }
     
     return TRUE;
 }

@@ -49,6 +49,10 @@ typedef struct _TLSerialData
     
     gboolean low_voltage_shutdown;
     
+    gboolean alarm_clock_enabled;
+    gint64 alarm_clock_time;
+    gint daily_alarm_clock_hour;
+    
     guint check_timeout_id;
 }TLSerialData;
 
@@ -432,6 +436,8 @@ static gboolean tl_serial_check_timeout_cb(gpointer user_data)
 {
     TLSerialData *serial_data = (TLSerialData *)user_data;
     gint64 now;
+    static guint count = 0;
+    GDateTime *dt;
     
     if(serial_data->write_watch_id==0 && serial_data->write_data!=NULL)
     {
@@ -482,6 +488,18 @@ static gboolean tl_serial_check_timeout_cb(gpointer user_data)
         }
     }
     
+    if(serial_data->alarm_clock_enabled && count%600==0)
+    {
+        dt = g_date_time_new_now_local();
+        if(g_date_time_to_unix(dt) > serial_data->alarm_clock_time)
+        {
+            tl_serial_power_on_daily_set(serial_data->daily_alarm_clock_hour);
+        }
+        g_date_time_unref(dt);
+    }
+    
+    count++;
+    
     return TRUE;
 }
 
@@ -490,9 +508,6 @@ gboolean tl_serial_init(const gchar *port)
     int fd;
     GIOChannel *channel;
     struct termios options;
-    
-    GDateTime *dt;
-    gint y, m, d;
     
     if(g_tl_serial_data.initialized)
     {
@@ -558,22 +573,6 @@ gboolean tl_serial_init(const gchar *port)
     tl_serial_heartbeat_request(&g_tl_serial_data);
     tl_serial_time_sync_request(&g_tl_serial_data);
     
-    
-    
-    tl_serial_gravity_threshold_set(60);
-    
-    dt = g_date_time_new_now_local();
-    g_date_time_get_ymd(dt, &y, &m, &d);
-    if(g_date_time_get_hour(dt)>=4)
-    {
-        d++;
-    }
-    g_date_time_unref(dt);
-    dt = g_date_time_new_local(y, m, d, 4, 0, 0);
-    tl_serial_power_on_time_set(g_date_time_to_unix(dt));
-    g_date_time_unref(dt);
-    
-        
     return TRUE;
 }
 
@@ -625,6 +624,7 @@ void tl_serial_uninit()
         g_queue_free_full(g_tl_serial_data.write_queue, (GDestroyNotify)
             tl_serial_write_data_free);
     }
+    g_tl_serial_data.alarm_clock_enabled = FALSE;
     
     g_tl_serial_data.initialized = FALSE;
 }
@@ -667,9 +667,29 @@ void tl_serial_power_on_time_set(gint64 time)
     buffer[6] = g_date_time_get_second(datetime);
     
     tl_serial_write_data_request(&g_tl_serial_data, 11, buffer, 7, TRUE);
+    g_tl_serial_data.alarm_clock_time = time;
+    g_tl_serial_data.alarm_clock_enabled = TRUE;
     
     g_date_time_unref(datetime);
     
+}
+
+void tl_serial_power_on_daily_set(gint hour)
+{
+    GDateTime *dt;
+    gint y, m, d;
+    
+    dt = g_date_time_new_now_local();
+    g_date_time_get_ymd(dt, &y, &m, &d);
+    if(g_date_time_get_hour(dt)>=hour)
+    {
+        d++;
+    }
+    g_date_time_unref(dt);
+    dt = g_date_time_new_local(y, m, d, hour, 0, 0);
+    tl_serial_power_on_time_set(g_date_time_to_unix(dt));
+    g_date_time_unref(dt);
+    g_tl_serial_data.daily_alarm_clock_hour = hour;
 }
 
 void tl_serial_gravity_threshold_set(guint8 threshold)
