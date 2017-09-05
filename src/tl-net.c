@@ -324,8 +324,6 @@ static gboolean tl_net_config_load(TLNetData *net_data,
         }
     }
     
-    g_key_file_free(keyfile);
-    
     if(g_key_file_has_key(keyfile, "Config", "GravityThreshold", NULL))
     {
         ivalue = g_key_file_get_integer(keyfile, "Config",
@@ -345,6 +343,8 @@ static gboolean tl_net_config_load(TLNetData *net_data,
             tl_serial_power_on_daily_set(ivalue);
         }
     }
+    
+    g_key_file_free(keyfile);
     
     return TRUE;
 }
@@ -2030,7 +2030,7 @@ gboolean tl_net_init(const gchar *vin, const gchar *iccid,
         conf_path = TL_NET_CONF_PATH_DEFAULT;
     }
     g_tl_net_data.conf_file_path = g_build_filename(conf_path,
-        "network.conf", NULL);
+        "settings.conf", NULL);
     tl_net_config_load(&g_tl_net_data, g_tl_net_data.conf_file_path);
     
     

@@ -32,7 +32,7 @@ else
 	INTLTOOLIZE=/usr/bin/intltoolize
 fi
 
-echo "Generating build scripts in Luna Pudge Server..."
+echo "Generating build scripts in TBox Logger..."
 set -x
 $LIBTOOLIZE --copy --force
 

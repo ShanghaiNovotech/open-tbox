@@ -52,6 +52,7 @@ typedef struct _TLSerialData
     gboolean alarm_clock_enabled;
     gint64 alarm_clock_time;
     gint daily_alarm_clock_hour;
+    guint8 gravity_threshold;
     
     guint check_timeout_id;
 }TLSerialData;
@@ -174,7 +175,7 @@ static void tl_serial_write_data_request(TLSerialData *serial_data,
     guint8 ack = need_ack ? 1 : 0;
     guint i;
     
-    if(serial_data==NULL)
+    if(serial_data==NULL || !serial_data->initialized)
     {
         return;
     }
@@ -253,7 +254,7 @@ static void tl_serial_data_parse(TLSerialData *serial_data)
         }
     }
     
-    g_message("TLSerial got command %u.", command);
+    g_message("TLSerial got command %u, result %u.", command, result);
     
     switch(command)
     {
@@ -573,6 +574,17 @@ gboolean tl_serial_init(const gchar *port)
     tl_serial_heartbeat_request(&g_tl_serial_data);
     tl_serial_time_sync_request(&g_tl_serial_data);
     
+    if(g_tl_serial_data.gravity_threshold>0)
+    {
+        tl_serial_gravity_threshold_set(g_tl_serial_data.gravity_threshold);
+    }
+    
+    
+    if(g_tl_serial_data.alarm_clock_enabled)
+    {
+        tl_serial_power_on_time_set(g_tl_serial_data.alarm_clock_time);
+    }
+    
     return TRUE;
 }
 
@@ -651,6 +663,9 @@ void tl_serial_power_on_time_set(gint64 time)
     GDateTime *datetime;
     guint8 buffer[7];
     
+    g_tl_serial_data.alarm_clock_time = time;
+    g_tl_serial_data.alarm_clock_enabled = TRUE;
+    
     if(!g_tl_serial_data.initialized)
     {
         return;
@@ -667,9 +682,7 @@ void tl_serial_power_on_time_set(gint64 time)
     buffer[6] = g_date_time_get_second(datetime);
     
     tl_serial_write_data_request(&g_tl_serial_data, 11, buffer, 7, TRUE);
-    g_tl_serial_data.alarm_clock_time = time;
-    g_tl_serial_data.alarm_clock_enabled = TRUE;
-    
+
     g_date_time_unref(datetime);
     
 }
@@ -678,6 +691,13 @@ void tl_serial_power_on_daily_set(gint hour)
 {
     GDateTime *dt;
     gint y, m, d;
+    
+    if(hour<0 || hour>23)
+    {
+        return;
+    }
+    
+    g_tl_serial_data.daily_alarm_clock_hour = hour;
     
     dt = g_date_time_new_now_local();
     g_date_time_get_ymd(dt, &y, &m, &d);
@@ -689,10 +709,10 @@ void tl_serial_power_on_daily_set(gint hour)
     dt = g_date_time_new_local(y, m, d, hour, 0, 0);
     tl_serial_power_on_time_set(g_date_time_to_unix(dt));
     g_date_time_unref(dt);
-    g_tl_serial_data.daily_alarm_clock_hour = hour;
 }
 
 void tl_serial_gravity_threshold_set(guint8 threshold)
-{    
+{
+    g_tl_serial_data.gravity_threshold = threshold;
     tl_serial_write_data_request(&g_tl_serial_data, 15, &threshold, 1, TRUE);
 }
