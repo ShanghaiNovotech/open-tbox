@@ -3,7 +3,7 @@
 
 #include <glib.h>
 
-gboolean tl_canbus_init();
+gboolean tl_canbus_init(gboolean use_vcan);
 void tl_canbus_uninit();
 
 #endif

@@ -150,7 +150,7 @@ static gboolean tl_canbus_open_socket(const gchar *device)
     return TRUE;
 }
 
-static GSList *tl_canbus_scan_devices()
+static GSList *tl_canbus_scan_devices(gboolean use_vcan)
 {
     GSList *device_list = NULL;
     struct ifaddrs *addrs = NULL, *addrs_foreach;
@@ -165,7 +165,8 @@ static GSList *tl_canbus_scan_devices()
     for(addrs_foreach=addrs;addrs_foreach!=NULL;
         addrs_foreach=addrs_foreach->ifa_next)
     {
-        if(!g_str_has_prefix(addrs_foreach->ifa_name, "can"))
+        if(!g_str_has_prefix(addrs_foreach->ifa_name, use_vcan ? "vcan" :
+            "can"))
         {
             continue;
         }
@@ -204,7 +205,7 @@ static gboolean tl_canbus_check_timeout_cb(gpointer user_data)
     return TRUE;
 }
 
-gboolean tl_canbus_init()
+gboolean tl_canbus_init(gboolean use_vcan)
 {
     GSList *device_list, *list_foreach;
     
@@ -217,7 +218,7 @@ gboolean tl_canbus_init()
     g_tl_canbus_data.socket_table = g_hash_table_new_full(g_direct_hash,
         g_direct_equal, NULL, (GDestroyNotify)tl_canbus_socket_data_free);
     
-    device_list = tl_canbus_scan_devices();
+    device_list = tl_canbus_scan_devices(use_vcan);
     if(device_list==NULL)
     {
         g_warning("TLCANBus no CANBus device detected!");

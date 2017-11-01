@@ -19,6 +19,7 @@ static gchar *g_tl_main_cmd_fallback_vehicle_server_host = NULL;
 static gint g_tl_main_cmd_fallback_vehicle_server_port = 0;
 static gchar *g_tl_main_cmd_serial_port = NULL;
 static gboolean g_tl_main_cmd_shutdown = FALSE;
+static gboolean g_tl_main_cmd_use_vcan = FALSE;
 
 static GOptionEntry g_tl_main_cmd_entries[] =
 {
@@ -40,6 +41,8 @@ static GOptionEntry g_tl_main_cmd_entries[] =
         "Set fallback vehicle server port", NULL },
     { "stm-serial-port", 0, 0, G_OPTION_ARG_STRING, &g_tl_main_cmd_serial_port,
         "Set STM8 connection serial port", NULL },
+    { "use-vcan", 0, 0, G_OPTION_ARG_NONE, &g_tl_main_cmd_use_vcan,
+        "Use virutal CAN instead of normal one", NULL },
     { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL, NULL }
 };
 
@@ -130,7 +133,7 @@ int main(int argc, char *argv[])
         return 3;
     }
     
-    if(!tl_canbus_init())
+    if(!tl_canbus_init(g_tl_main_cmd_use_vcan))
     {
         g_error("Cannot initialize CAN-Bus!");
         return 4;
