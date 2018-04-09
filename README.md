@@ -1,5 +1,10 @@
-## open-tbox
+# open-tbox 开源-TBOX
+tbox = Telematics BOX or T-BOX, it is installed inside a vehicle and connects vehicle's CANBUS/OBD, and GPS, LAN, WIFI, BT & Celluar Connections, providing a gateway for remote CANBUS r/w and other features(controls, internet connections and etc).
 
+The hardware is made by Shanghai Novotech, it is an NXP imx6ul Low power Cortex-A7 automobile grade processor, 8GB emmc and 256MB DDR3L with 3.6v 800mAh Ni-MH backed UPS power for up to 10 mins emergency power loss backup. 
+
+## Software Potocol and Standards
+This repo complients with China National GB Standards. 符合中国国标开发的。
 
 
 ## How to compile on Debian/Ubuntu:
@@ -33,3 +38,9 @@ sudo ./test-tbox-logger-start.sh
 ```
 
 You can change VIN, ICCID, server address and port in test-tbox-logger-start.sh for testing.
+
+
+# Help, Contribute and more
+Fork it and submit merge request.
+
+yiling.cao[ @ ] shanghainovotech.com for more info.
